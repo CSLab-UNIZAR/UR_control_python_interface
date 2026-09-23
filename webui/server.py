@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
+from ur10api.config import save_workspace
 from webui import config
 from webui import kinematics as kin
 from webui.robot import PHASE_TEXT, MotionError, NotReady
@@ -45,9 +46,8 @@ def _limits_text(limits):
 class Api:
     """Maps the HTTP endpoints to RobotLink / Motion / store calls."""
 
-    def __init__(self, link, motion, poses, events, workspace_store):
+    def __init__(self, link, motion, poses, events):
         self.link, self.motion, self.poses, self.events = link, motion, poses, events
-        self.workspace_store = workspace_store
 
     def config(self):
         return {
@@ -58,6 +58,7 @@ class Api:
                       "joint_deg": config.JOINT_STEPS_DEG},
             "keepalive_ms": int(config.WATCHDOG_S * 1000 / 4),
             "confirm_above_deg": config.CONFIRM_ABOVE_DEG,
+            "settings_file": config.SETTINGS.name,   # where the workspace limits are saved
             "joint_names": kin.JOINT_NAMES,
             "viewer": {   # used by the 3D view
                 "arm_joints": kin.ARM_JOINTS,
@@ -142,15 +143,23 @@ class Api:
             log.info("Deleted pose %r", body.get("name"))
         elif path == "/api/workspace":   # limits in mm, UR base frame
             kin.set_workspace_limits({axis: [float(v) / 1000.0 for v in body.get(axis, [])] for axis in "xyz"})
-            self.workspace_store.save(kin.workspace_limits())
-            log.warning("Workspace limits set to %s (UR base frame, web panel only)", _limits_text(kin.workspace_limits()))
+            self._save_workspace("set to")
         elif path == "/api/workspace/reset":
             kin.set_workspace_limits(kin.DEFAULT_WORKSPACE)
-            self.workspace_store.clear()
-            log.info("Workspace limits reset to UR_CONTROL's defaults: %s", _limits_text(kin.workspace_limits()))
+            self._save_workspace("reset to UR_CONTROL's defaults:")
         else:
             return None
         return {"ok": True}
+
+    def _save_workspace(self, what):
+        """Write the panel's limits into the settings file (used by ur10api programs started later)."""
+        limits = kin.workspace_limits()
+        try:
+            path = save_workspace(limits, config.SETTINGS.path)
+        except (OSError, ValueError) as exc:
+            log.error("Workspace limits %s %s, but not saved: %s", what, _limits_text(limits), exc)
+            raise ValueError(f"limits applied in the panel but not saved ({exc})") from None
+        log.warning("Workspace limits %s %s (UR base frame), saved in %s", what, _limits_text(limits), path.name)
 
     def _plan_or_move(self, body, execute):
         speed = body.get("speed_deg_s", config.MOVE_SPEED_DEG_S[0])

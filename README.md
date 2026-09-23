@@ -13,7 +13,10 @@ On top of the framework there are:
   **3D view** shows the Campero and the arm like RViz, built from the robot's URDF;
 - a **Python API** (`ur10api/`) for your own control code: read joints, TCP pose,
   force/torque and gripper, and send position or velocity commands, with three
-  example programs (`examples/`) and a [developer guide](docs/ur10api.md);
+  example programs with live dashboards (`examples/`) and a
+  [developer guide](docs/ur10api.md);
+- one commented **settings file**, `ur10_config.yaml`: robot address, TCP,
+  workspace limits, safety limits, panel settings and the examples' gains;
 - the original **controllers**: terminal keyboard, 3Dconnexion SpaceMouse, Leap
   Motion hand gestures and force-guided motion.
 
@@ -106,14 +109,17 @@ core/                 framework
   conversions.py        pose / quaternion / RPY conversions
   plots.py, spacemouse.py, leap_gestures*.py, trajectory.py, ros_structs.py
 controllers/          original controllers (keyboard, SpaceMouse, Leap Motion, force)
+ur10_config.yaml      settings: address, TCP, workspace, safety, panel, examples (edit here)
 ur10api/              Python API for your own control code (docs/ur10api.md)
   robot.py              Robot: state, position/velocity commands, gripper, sensor, stop
+  config.py             load_config(): reads and checks ur10_config.yaml
   kinematics.py         calibrated FK/IK (ArmModel) and workspace box (Workspace)
   transforms.py         pose helpers (trans, rotz, displace, pose_error, ...)
-  viz.py                FrameView: live 3D plot of the arm, frames and paths
+  viz.py                live plots: Dashboard (3D views + time plots), FrameView
 examples/             ur10api demos: pose control, velocity path, force teleoperation
+runs/                 summary figures saved by the examples (not tracked)
 webui/                web control panel  ->  python -m webui
-  config.py             speeds, limits, rates, TCP, presets (edit here)
+  config.py             the panel's settings, read from ur10_config.yaml
   robot.py              connection + monitoring + motion logic
   kinematics.py         ur10api's kinematics with the panel's TCP and workspace
   server.py             local HTTP server and JSON API
@@ -303,7 +309,7 @@ default the two still show different things:
 
 | | Pendant (Move tab) | Panel |
 |---|---|---|
-| Point | TCP set in *Installation → TCP* (by default the bare flange) | `TCP` in `webui/config.py`: flange + 150 mm along tool Z, as in UR_CONTROL |
+| Point | TCP set in *Installation → TCP* (by default the bare flange) | `tcp:` in `ur10_config.yaml`: flange + 150 mm along tool Z, as in UR_CONTROL |
 | Orientation | rotation vector RX, RY, RZ [rad] | roll/pitch/yaw [°] |
 
 To compare like with like:
@@ -311,7 +317,7 @@ To compare like with like:
 1. On the pendant, set *Feature* to **Base**.
 2. In the panel's Pose card, select **Flange**. Alternatively, keep TCP and give the
    pendant the same TCP (X 0, Y 0, Z 150 mm, no rotation), or copy the pendant's TCP
-   into `TCP` in `webui/config.py`.
+   into `tcp:` in `ur10_config.yaml`.
 3. Select **Rot. vector rad** in the panel, or set the pendant to *RPY [°]*
    (UR's RPY uses the same convention as the panel).
 
@@ -327,15 +333,17 @@ UR_CONTROL keeps the **TCP** inside a box in the UR base frame
 800 mm and z from 200 to 800 mm. That is from 0.3 m to 1.3 m behind the arm base
 (towards the rear of the Campero) and 0.2–0.8 m above it.
 
-**Setting the limits.** Open *Workspace limits* under the 3D view, type the minimum
-and maximum of x, y and z in mm (UR base frame) and press **Apply**. The box in the
-3D view and all panel checks use the new limits at once. They are saved in
-`workspace_limits.json` at the repository root and reloaded at start-up (commit the
-file to share the cell's limits). **Reset to UR_CONTROL defaults** restores the
-values from `core/ur10_core.py` and deletes the file. Each axis needs a span of at
-least 10 mm and limits within ±2000 mm of the UR base. These limits apply to the
-web panel only; the other controllers keep `WORKSPACE_LIMITS` from
-`core/ur10_core.py`.
+**Setting the limits.** The limits live in the `workspace:` section of
+`ur10_config.yaml` (mm, UR base frame); edit them there, or in the panel: open
+*Workspace limits* under the 3D view, type the minimum and maximum of x, y and z
+and press **Apply**. The box in the 3D view and all panel checks use the new
+limits at once, and the panel writes them into `ur10_config.yaml` (only the
+numbers of that section change; comments and other settings are kept). **Reset
+to UR_CONTROL defaults** writes the values of `WORKSPACE_LIMITS` in
+`core/ur10_core.py`. Each axis needs a span of at least 10 mm and limits within
+±2000 mm of the UR base. The limits apply to the web panel and to `ur10api`
+programs (including the examples) started afterwards; the original controllers
+keep `WORKSPACE_LIMITS` from `core/ur10_core.py`.
 
 The panel accepts a Cartesian target only if it is **inside the box, or strictly
 closer to the box than the current pose**. So:
@@ -477,7 +485,8 @@ pattern and examples.
 ```python
 from ur10api import Rate, Robot
 
-with Robot("CMP00-180723AD.local") as robot:
+with Robot() as robot:                          # settings from ur10_config.yaml
+    robot.check_command_link()                  # wait until commands reach the arm promptly
     state = robot.state()                       # joints, TCP pose, force/torque, gripper
     robot.move_tcp_by(dp=(0, 0, 0.05))          # position command (blocking)
     rate = Rate(25)
@@ -489,11 +498,23 @@ with Robot("CMP00-180723AD.local") as robot:
 
 | Example | Shows |
 |---|---|
-| `examples/01_pose_frames.py` | pose control: the TCP aligns with three frames defined in the tool or base frame (P-controller on velocity, or joint moves), with a live 3D view |
-| `examples/02_velocity_path.py` | velocity control: the TCP follows a small circle or an infinity shape (feed-forward + P feedback), then plots the tracking error |
+| `examples/01_pose_frames.py` | pose control: the TCP aligns with target frames defined in the tool or base frame (P-controller on velocity, or joint moves) |
+| `examples/02_velocity_path.py` | velocity control: the TCP follows a circle or an infinity shape (feed-forward + P feedback) |
 | `examples/03_force_teleop.py` | compliant teleoperation: push the gripper and the arm follows the force/torque sensor (admittance control) |
 
 Run them from the repository root, e.g. `python examples/01_pose_frames.py --help`.
+Their defaults (targets, gains, path, dead bands…) are in the `examples:`
+section of `ur10_config.yaml`; command-line options override them. Each one:
+
+- first checks the **command link**: right after connecting, the first commands
+  can take a few seconds to reach the arm, so wrist 3 moves back and forth by 1°
+  until three moves in a row arrive promptly (`--no-link-check` skips it);
+- shows a live **dashboard**: an overview of the arm, a 3D close-up with the
+  reference and the path the TCP really followed, and time plots of the target
+  against the measured state;
+- on `Ctrl+C`, when the window is closed or at the end, brakes and turns the
+  window into a **summary** of the whole run, saved as a PNG in `runs/`.
+
 The setup scripts register the repository in `.venv`, so `import ur10api` also
 works from your own folders.
 
@@ -615,26 +636,30 @@ are in `webui/kinematics.py`.
 
 ## Configuration
 
-Panel settings live in `webui/config.py`. The most relevant ones:
+All settings live in **`ur10_config.yaml`** at the repository root, with a
+comment on every line. The web panel, `ur10api.Robot` and the examples read it at
+start-up (restart them after editing). Units are those of the pendant and the
+panel: mm, deg, s, N, Nm.
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `ROBOT_HOST`, `ROBOT_PORT` | `CMP00-180723AD.local`, `9090` | rosbridge address |
-| `HTTP_HOST`, `HTTP_PORT` | `127.0.0.1`, `8080` | where the panel is served |
-| `STALE_AFTER_S` | 0.5 s | joint-state age that blocks motion |
-| `WATCHDOG_S` | 0.4 s | jog stops without a browser keep-alive for this long |
-| `JOG_RATE_HZ`, `JOG_LOOKAHEAD_S`, `JOG_RAMP_S` | 20 Hz, 0.25 s, 0.3 s | velocity-jog streaming |
-| `JOG_MAX_JOINT_SPEED`, `JOG_MAX_JOINT_STEP` | 0.6 rad/s, 0.35 rad | Cartesian-jog joint speed cap and IK-jump limit |
-| `LINEAR_SPEED_MM_S`, `ANGULAR_SPEED_DEG_S`, `JOINT_JOG_SPEED_DEG_S`, `MOVE_SPEED_DEG_S` | (default, min, max) | slider ranges |
-| `STOP_BRAKE_S` | 0.4 s | duration of the STOP trajectory |
-| `CONFIRM_ABOVE_DEG` | 45° | moves larger than this ask for confirmation |
-| `TCP` | `(0, 0, 0.15, 0, 0, 0)` | TCP relative to the flange (x, y, z m, rotation vector rad), written like the pendant's TCP setting |
-| `ARM_BASE_FRAME`, `FLANGE_FRAME`, `ARM_JOINTS` | `campero_ur10_base`, `campero_ur10_tool0`, `campero_ur10_*` | how the arm is found in the robot model |
-| `GRIPPER_FEEDBACK_TOPICS` | `/robotiq_2f_gripper/input`, `/Robotiq2FGripperRobotInput` | gripper status topics watched; `()` disables them |
-| `PRESET_POSES_DEG` | force-control start | built-in joint presets |
+| Section | Contents |
+|---|---|
+| `robot` | rosbridge host (`CMP00-180723AD.local`) and port (9090), reachability timeout |
+| `tcp` | TCP relative to the flange, written like the pendant's TCP setting: position [mm], rotation vector [deg]; default 150 mm along tool Z, as in UR_CONTROL |
+| `workspace` | TCP box in the UR base frame [mm] (see [Workspace limits](#workspace-limits)) |
+| `safety` | joint-state age that blocks motion (0.5 s), STOP duration (0.4 s), streaming look-ahead (0.25 s), largest IK jump per streamed step (20°) |
+| `api` | speed and acceleration caps of `ur10api.Robot` |
+| `gripper` | gripper status topics watched; `[]` disables them |
+| `link_check` | start-up check of the command link used by the examples |
+| `plots` | live plots of the examples: history window, refresh rate, folder of the saved figures |
+| `panel` | panel address (127.0.0.1:8080), jog watchdog and streaming, slider ranges, step sizes, confirmation threshold, joint presets |
+| `examples` | defaults of the three examples: targets, gains, tolerances, path shape and size, dead bands |
 
-The workspace limits are set from the panel (see [Workspace limits](#workspace-limits))
-and stored in `workspace_limits.json`; saved joint poses go to `saved_poses.json`.
+The file is checked when it is read: an unknown key or an invalid value stops
+the program with a message naming the key, so a typo never silently disables a
+limit; missing keys take built-in defaults. Set `UR10_CONFIG` to use another
+file. Saved joint poses go to `saved_poses.json`. `webui/config.py` only converts
+the panel's values; the original controllers (`controllers/`) do not read the
+file.
 
 ---
 

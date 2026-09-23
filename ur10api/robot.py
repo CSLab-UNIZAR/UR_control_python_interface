@@ -2,7 +2,7 @@
 
     from ur10api import Robot
 
-    with Robot("CMP00-180723AD.local") as robot:
+    with Robot() as robot:                       # host, TCP, workspace, caps: ur10_config.yaml
         print(robot.tcp_pose())                  # 4x4 pose of the TCP in the UR base frame
         robot.move_tcp_by(dp=(0, 0, 0.05))       # 5 cm up (blocking)
         robot.close_gripper()
@@ -19,6 +19,7 @@ emergency stop: keep the teach pendant within reach.
 """
 
 import logging
+import math
 import socket
 import threading
 import time
@@ -30,19 +31,16 @@ import roslibpy
 from core.ur_control import UR10Control
 from ur10api import kinematics as kin
 from ur10api import transforms as tf
+from ur10api.config import DEFAULT_HOST, DEFAULT_PORT, Config, load_config  # noqa: F401  (re-exported)
 
 log = logging.getLogger("ur10api")
 
-DEFAULT_HOST = "CMP00-180723AD.local"   # Campero PC running rosbridge_websocket
-DEFAULT_PORT = 9090
-
 # UR10Control.joint_states_callback reads J1..J6 from these indices of /joint_states
 ARM_JOINT_INDEX = (-4, -5, -6, -3, -2, -1)
-# Gripper status published by Robotiq2FGripperRtuNode.py (remapped by campero_ur10_bringup.launch)
-GRIPPER_TOPICS = ("/robotiq_2f_gripper/input", "/Robotiq2FGripperRobotInput")
+# Message type of the gripper status topics (gripper.feedback_topics in ur10_config.yaml)
 GRIPPER_TYPE = "robotiq_2f_gripper_control/Robotiq2FGripper_robot_input"
-
-STOP_BRAKE_S = 0.4   # duration of the braking trajectory sent by stop()
+# A TCP this close to the workspace box counts as on its face (tracking and IK error)
+FACE_TOLERANCE = 0.002   # m
 
 
 class RobotError(RuntimeError):
@@ -137,6 +135,11 @@ class Rate:
             self._next = time.monotonic() + self.period
 
 
+def _given(value, default):
+    """`value`, or `default` when it is None."""
+    return default if value is None else value
+
+
 def _cap(vector, limit):
     """Scale `vector` down so that its norm is at most `limit`."""
     norm = float(np.linalg.norm(vector))
@@ -146,36 +149,41 @@ def _cap(vector, limit):
 class Robot:
     """Connection to the Campero UR10 through rosbridge, with state and commands.
 
-    Parameters (all optional):
-        host, port         rosbridge address (default CMP00-180723AD.local:9090)
-        tcp                TCP relative to the flange (x, y, z [m], rx, ry, rz [rad]);
-                           default flange + 150 mm, as in UR_CONTROL
-        workspace          TCP box {axis: (min, max)} [m]; default UR_CONTROL's limits
-        max_linear_speed   cap of velocity commands [m/s]
+    Every parameter left out (None) is taken from ur10_config.yaml (see
+    ur10api.config); the ones you pass win. Parameters, in SI units:
+        host, port         rosbridge address                          (robot: section)
+        tcp                TCP relative to the flange (x, y, z [m], rx, ry, rz [rad])   (tcp:)
+        workspace          TCP box {axis: (min, max)} [m], UR base frame           (workspace:)
+        max_linear_speed   cap of velocity commands [m/s]              (api: section)
         max_angular_speed  cap of velocity commands [rad/s]
         max_joint_speed    cap of every joint [rad/s] (moves and streaming)
         max_linear_accel   rate limit of velocity commands [m/s^2]
         max_angular_accel  rate limit of velocity commands [rad/s^2]
+        config             settings to use: a Config from load_config(), or a file path
+                           (default: ur10_config.yaml, or the file in $UR10_CONFIG)
         timeout            seconds to wait for the connection and the first joint state
 
     Only one Robot per Python process: roslibpy's event loop cannot restart.
     """
 
-    lookahead = 0.25        # s: streamed velocity targets lie this far ahead (their time_from_start)
-    stale_after = 0.5       # s: commands are refused with older joint states
-    max_joint_step = 0.35   # rad: a larger IK jump in one streamed step is refused
-
-    def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT, *, tcp=kin.DEFAULT_TCP, workspace=None,
-                 max_linear_speed=0.10, max_angular_speed=0.5, max_joint_speed=0.8,
-                 max_linear_accel=0.5, max_angular_accel=2.0, timeout=10.0):
-        self.arm = kin.ArmModel(tcp=tcp)
-        self.workspace = kin.Workspace(workspace)
-        self.max_linear_speed = max_linear_speed
-        self.max_angular_speed = max_angular_speed
-        self.max_joint_speed = max_joint_speed
-        self.max_linear_accel = max_linear_accel
-        self.max_angular_accel = max_angular_accel
-        self.last_warning = ""               # why the last velocity command was not sent
+    def __init__(self, host=None, port=None, *, tcp=None, workspace=None,
+                 max_linear_speed=None, max_angular_speed=None, max_joint_speed=None,
+                 max_linear_accel=None, max_angular_accel=None, config=None, timeout=10.0):
+        cfg = config if isinstance(config, Config) else load_config(config)
+        api, safety = cfg["api"], cfg["safety"]
+        self.config = cfg                    # the settings in use (file units: mm, deg)
+        self.arm = kin.ArmModel(tcp=cfg.tcp_offset() if tcp is None else tcp)
+        self.workspace = kin.Workspace(cfg.workspace_limits() if workspace is None else workspace)
+        self.max_linear_speed = _given(max_linear_speed, api["max_linear_speed"] / 1000.0)
+        self.max_angular_speed = _given(max_angular_speed, math.radians(api["max_angular_speed"]))
+        self.max_joint_speed = _given(max_joint_speed, math.radians(api["max_joint_speed"]))
+        self.max_linear_accel = _given(max_linear_accel, api["max_linear_accel"] / 1000.0)
+        self.max_angular_accel = _given(max_angular_accel, math.radians(api["max_angular_accel"]))
+        self.lookahead = safety["lookahead"]                          # s: horizon of streamed velocity targets
+        self.stale_after = safety["stale_after"]                      # s: older joint states block commands
+        self.max_joint_step = math.radians(safety["max_joint_step"])  # rad: larger streamed IK jumps are refused
+        self.stop_brake = safety["stop_brake"]                        # s: duration of the stop() trajectory
+        self.last_warning = ""               # why the last velocity command was not sent or was limited
         self._send_lock = threading.Lock()
         self._js_time = None                 # arrival time of the last /joint_states
         self._ft_time = None                 # arrival time of the last force/torque message
@@ -186,13 +194,13 @@ class Robot:
         self._velocity_time = None
         self._busy_until = 0.0                # when the last sent trajectory ends
         self._ur = None
-        self._connect(host, port, timeout)
+        self._connect(_given(host, cfg["robot"]["host"]), _given(port, cfg["robot"]["port"]), timeout)
 
     # ------------------------------------------------------------------ connection
 
     def _connect(self, host, port, timeout):
         try:   # fail fast, with a clear message, when the Campero is unreachable
-            with socket.create_connection((host, port), timeout=3.0):
+            with socket.create_connection((host, port), timeout=self.config["robot"]["probe_timeout"]):
                 pass
         except OSError as exc:
             raise NotReady(f"cannot reach rosbridge at {host}:{port} ({exc})") from exc
@@ -209,7 +217,7 @@ class Robot:
         # listener of a topic), plus the gripper status topics.
         ur.ros.on("/joint_states", self._on_joint_states)
         ur.ros.on("/robotiq_ft_sensor", self._on_wrench)
-        for name in GRIPPER_TOPICS:
+        for name in self.config["gripper"]["feedback_topics"]:
             topic = roslibpy.Topic(ur.ros, name, GRIPPER_TYPE)
             topic.subscribe(self._on_gripper)
             self._gripper_topics.append(topic)
@@ -386,6 +394,76 @@ class Robot:
             self.stop()
             raise
 
+    # ------------------------------------------------------------------ start-up check
+
+    def check_command_link(self, report=None, step=None, move_time=None, max_delay=None, good_moves=None,
+                           timeout=None):
+        """Wiggle wrist 3 until the arm follows commands promptly; returns the measured delays [s].
+
+        Right after connecting, the first commands can take seconds to reach the arm
+        (rosbridge and ROS set up the publisher towards the Campero nodes), while the
+        joint states already arrive quickly. This sends small back-and-forth wrist-3
+        moves of `step` degrees lasting `move_time` s, and measures for each one how
+        long the measured wrist takes to get halfway, minus the half of move_time the
+        motion itself needs: that is the delay of the command. A move without an
+        answer is sent again. It returns once `good_moves` moves in a row had a delay
+        below `max_delay` s and the wrist is back where it started; after `timeout` s
+        it raises NotReady. `report(text)`, e.g. print, receives progress messages.
+        Defaults: the link_check: section of ur10_config.yaml.
+        """
+        cfg = self.config["link_check"]
+        step = math.radians(cfg["step"] if step is None else step)
+        move_time = cfg["move_time"] if move_time is None else move_time
+        max_delay = cfg["max_delay"] if max_delay is None else max_delay
+        good_moves = cfg["good_moves"] if good_moves is None else good_moves
+        timeout = cfg["timeout"] if timeout is None else timeout
+        say = report or (lambda text: None)
+        joint = 5                                            # wrist 3: only turns the gripper
+        self._reset_velocity()
+        home = self._fresh_state().q
+        sign = -1.0 if home[joint] > 0 else 1.0              # away from the +/-360 deg limit
+        deadline = time.monotonic() + timeout
+        delays, streak, outward = [], 0, True
+        say(f"Checking the command link: wrist 3 moves back and forth by {math.degrees(step):.1f} deg ...")
+        while True:
+            goal = home.copy()
+            if outward:
+                goal[joint] += sign * step
+            start = self._fresh_state().q[joint]
+            if abs(goal[joint] - start) < 0.25 * step:       # already there (a late command arrived)
+                outward = not outward
+                continue
+            halfway, direction = 0.5 * (start + goal[joint]), np.sign(goal[joint] - start)
+            sent = time.monotonic()
+            self._send_joints(goal, move_time)
+            delay = None
+            while time.monotonic() - sent < move_time + 1.0:
+                if direction * (self._ur.joint_states[joint] - halfway) >= 0:
+                    delay = max(0.0, time.monotonic() - sent - move_time / 2)
+                    break
+                time.sleep(0.002)
+            if time.monotonic() > deadline:
+                raise NotReady(f"the arm did not follow commands promptly within {timeout:.0f} s "
+                               f"(delays so far: {', '.join(f'{d:.2f}' for d in delays) or 'no answer'} s)")
+            if delay is None:
+                streak = 0
+                say("  no answer yet, sending again")
+                continue
+            delays.append(delay)
+            streak = streak + 1 if delay <= max_delay else 0
+            say(f"  move {len(delays)}: delay {delay * 1000:.0f} ms" + ("" if delay <= max_delay else "  (too slow)"))
+            try:
+                self.wait_until_reached(goal, tol=0.15 * step, timeout=move_time + 2.0)
+            except RobotError:
+                pass
+            if streak >= good_moves and not outward:          # back home after enough prompt moves
+                time.sleep(0.3)                               # nothing late may move it again
+                if abs(self._fresh_state().q[joint] - home[joint]) < 0.25 * step:
+                    say(f"Command link ready: delay {1000 * np.mean(delays[-good_moves:]):.0f} ms.")
+                    return delays
+                streak = 0
+            outward = not outward
+
     # ------------------------------------------------------------------ velocity commands
 
     def set_tcp_velocity(self, v=(0.0, 0.0, 0.0), w=(0.0, 0.0, 0.0), frame="base"):
@@ -397,16 +475,22 @@ class Robot:
         last call. frame="base" (UR base axes, rotation about the TCP) or "tool".
         Speeds are capped and ramped (max_*_speed, max_*_accel); a zero velocity
         brakes. At the workspace box the TCP stops at (and can slide along) its
-        faces. Returns False when nothing could be sent; see last_warning.
+        faces. Returns False when nothing could be sent; last_warning says why,
+        or which workspace limit is holding the TCP.
         """
         state = self._fresh_state()
         command = self._limit_velocity(np.r_[np.asarray(v, dtype=float), np.asarray(w, dtype=float)])
         if not np.any(command):
             return self._brake(state)
         target = tf.displace(state.tcp, command[:3] * self.lookahead, command[3:] * self.lookahead, frame)
+        note = ""
         if not self.workspace.contains(target):
-            if self.workspace.contains(state.tcp):
-                target[:3, 3] = self.workspace.clamp(target[:3, 3])   # stop at the face, keep sliding along it
+            if self.workspace.distance(state.tcp) <= FACE_TOLERANCE:   # inside or on a face:
+                wanted = target[:3, 3].copy()                          # stop at the face, slide along it
+                target[:3, 3] = self.workspace.clamp(wanted)
+                note = "at the workspace limit: " + ", ".join(
+                    f"{axis} = {value * 1000:.0f} mm" for axis, value, want in zip("xyz", target[:3, 3], wanted)
+                    if abs(value - want) > 1e-9)
             elif not self.workspace.allows(state.tcp, target):
                 return self._refuse("outside the workspace, moving away from it: "
                                     + ", ".join(self.workspace.violations(state.tcp)))
@@ -418,7 +502,7 @@ class Robot:
         if step > self.max_joint_step:
             return self._refuse(f"IK jump of {np.degrees(step):.0f} deg (singularity or arm configuration change)")
         self._send_joints(q, max(self.lookahead, step / self.max_joint_speed))
-        self.last_warning = ""
+        self.last_warning = note
         return True
 
     def set_joint_velocity(self, qd):
@@ -474,7 +558,7 @@ class Robot:
         self._reset_velocity()
         state = self._fresh_state()
         velocity = state.qd if state.qd is not None else np.zeros(6)
-        target = np.clip(state.q + velocity * STOP_BRAKE_S / 2, -kin.JOINT_LIMIT, kin.JOINT_LIMIT)
+        target = np.clip(state.q + velocity * self.stop_brake / 2, -kin.JOINT_LIMIT, kin.JOINT_LIMIT)
         if np.max(np.abs(target - state.q)) < 1e-4:
             if time.monotonic() > self._busy_until + 0.5:
                 return
@@ -482,7 +566,7 @@ class Robot:
             # distance / speed, so nudge wrist 3 by 1e-4 rad (0.006 deg) to keep a
             # non-zero duration while replacing that motion.
             target[5] += -1e-4 if target[5] > 0 else 1e-4
-        self._send_joints(target, STOP_BRAKE_S)
+        self._send_joints(target, self.stop_brake)
 
     def open_gripper(self):
         """Open the Robotiq gripper (UR10Control.send_gripper_cmd)."""

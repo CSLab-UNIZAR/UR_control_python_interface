@@ -13,12 +13,16 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:          # "core" is imported as a top-level package
     sys.path.insert(0, str(ROOT))
 
-from webui import config                                   # noqa: E402
+from ur10api.config import ConfigError                    # noqa: E402
+
+try:
+    from webui import config                               # reads ur10_config.yaml
+except ConfigError as exc:
+    sys.exit(f"Settings error: {exc}")
 from webui import kinematics as kin                        # noqa: E402
 from webui.poses import PoseStore                          # noqa: E402
 from webui.robot import EventLog, Motion, RobotLink        # noqa: E402
 from webui.server import Api, make_server                  # noqa: E402
-from webui.settings import WorkspaceStore                  # noqa: E402
 
 
 class _PrintsToLog(io.TextIOBase):
@@ -73,16 +77,12 @@ def main():
     link = RobotLink(gripper_topics=() if args.no_gripper_feedback else config.GRIPPER_FEEDBACK_TOPICS)
     link.host, link.port = args.host, args.port
     motion = Motion(link)
-    workspace_store = WorkspaceStore(ROOT / "workspace_limits.json")
-    saved_limits = workspace_store.load()
-    if saved_limits:
-        try:
-            kin.set_workspace_limits(saved_limits)
-            log.info("Workspace limits from %s: %s", workspace_store.path.name,
-                     ", ".join(f"{a} {lo * 1000:.0f} to {hi * 1000:.0f}" for a, (lo, hi) in kin.workspace_limits().items()) + " mm")
-        except ValueError as exc:
-            log.error("Ignoring %s (%s); using UR_CONTROL's workspace limits", workspace_store.path.name, exc)
-    api = Api(link, motion, PoseStore(ROOT / "saved_poses.json"), events, workspace_store)
+    log.info("Settings: %s. Workspace (UR base frame): %s", config.SETTINGS.name,
+             ", ".join(f"{a} {lo * 1000:.0f} to {hi * 1000:.0f}" for a, (lo, hi) in kin.workspace_limits().items()) + " mm")
+    if (ROOT / "workspace_limits.json").exists():
+        log.warning("workspace_limits.json is no longer read: the limits live in the workspace section of %s",
+                    config.SETTINGS.name)
+    api = Api(link, motion, PoseStore(ROOT / "saved_poses.json"), events)
     try:
         server = make_server(api, args.listen, args.http_port)
     except OSError as exc:

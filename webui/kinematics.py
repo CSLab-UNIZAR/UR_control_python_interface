@@ -1,7 +1,7 @@
 """Kinematics of the web panel: ur10api's calibrated model with the panel's TCP and workspace.
 
-The panel uses one arm model (TCP from webui/config.py) and one workspace box
-(editable from the page); the module-level functions below wrap them.
+The panel uses one arm model and one workspace box, both from ur10_config.yaml
+(the box is also editable from the page); the module-level functions below wrap them.
 """
 
 from ur10api.kinematics import (  # noqa: F401  (re-exported for the panel)
@@ -26,7 +26,7 @@ from ur10api.transforms import (  # noqa: F401
 from webui import config
 
 ARM = ArmModel(tcp=config.TCP)
-WORKSPACE = Workspace()
+WORKSPACE = Workspace(config.WORKSPACE)
 
 
 def fk(q, tcp=True):

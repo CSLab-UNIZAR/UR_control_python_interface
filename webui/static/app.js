@@ -529,7 +529,7 @@ function bindEvents() {
     if (!r.ok) return;
     S.wsDirty = false;
     $("#ws-apply").disabled = true;
-    setText("ws-note", "applied");
+    setText("ws-note", "applied and saved in " + (S.cfg.settings_file || "the settings file"));
   });
   $("#ws-reset").addEventListener("click", async () => {
     releaseAll();
@@ -538,7 +538,7 @@ function bindEvents() {
     if (!r.ok) return;
     S.wsDirty = false;
     $("#ws-apply").disabled = true;
-    setText("ws-note", "defaults restored");
+    setText("ws-note", "defaults restored and saved in " + (S.cfg.settings_file || "the settings file"));
   });
 
   $("#pose-select").addEventListener("change", updatePoseButtons);

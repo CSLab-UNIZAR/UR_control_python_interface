@@ -1,0 +1,157 @@
+# =============================================================================
+#  UR10 on the Campero: settings
+# =============================================================================
+# Read at start-up by the web panel (python -m webui), the Python API
+# (ur10api.Robot) and the examples (examples/*.py): restart them after editing.
+#
+#  - Units: mm, deg, s, N and Nm (as on the teach pendant and in the panel),
+#    unless a comment says otherwise.
+#  - Missing keys take built-in defaults (ur10api/config.py). Unknown keys and
+#    invalid values stop the program with a message naming the key, so a typo
+#    never silently disables a limit.
+#  - The panel's "Workspace limits" editor rewrites the numbers of the
+#    `workspace:` section and leaves the rest of this file untouched.
+#  - Another file can be used by setting the UR10_CONFIG environment variable.
+#  - The original controllers (controllers/) do not read this file: they keep
+#    their own constants and UR_CONTROL's workspace (core/ur10_core.py).
+
+# --- Connection to the Campero -----------------------------------------------
+robot:
+  host: CMP00-180723AD.local   # Campero PC running rosbridge_websocket (or its IP)
+  port: 9090                   # rosbridge_websocket port
+  probe_timeout: 3.0           # s: reachability check before connecting
+
+# --- Tool centre point (TCP) -------------------------------------------------
+# Relative to the flange (tool0), like the pendant's Installation > TCP. All
+# poses, Cartesian commands and the workspace check use this point.
+# UR_CONTROL's TCP is 150 mm along the tool Z axis.
+tcp:
+  position: [0, 0, 150]        # mm
+  rotation: [0, 0, 0]          # rotation vector, deg (pendant: RX, RY, RZ in deg)
+
+# --- Workspace ---------------------------------------------------------------
+# Box that the TCP must stay in, in the UR base frame (pendant feature "Base"), mm.
+# A Cartesian command is accepted if its target is inside the box, or strictly
+# closer to it than the current TCP (so an arm outside the box can come back).
+# The panel's "Reset to UR_CONTROL defaults" writes here WORKSPACE_LIMITS of
+# core/ur10_core.py (the box of the original controllers, which ignore this file).
+# Each axis needs a span of at least 10 mm, within +/-2000 mm of the UR base.
+workspace:
+  x: [-800, 500]
+  y: [-500, 980]
+  z: [-500, 800]
+
+# --- Safety interlocks (web panel and ur10api) --------------------------------
+safety:
+  stale_after: 0.5             # s: joint states older than this block every command
+  stop_brake: 0.4              # s: duration of the braking trajectory (STOP, robot.stop())
+  lookahead: 0.25              # s: velocity streaming sends targets this far ahead, so the
+                               #    arm stops about this long after the last command
+  max_joint_step: 20           # deg: a larger IK jump between two streamed targets is refused
+
+# --- ur10api.Robot: caps on the commands of your scripts ----------------------
+# Keyword arguments of Robot(...) override these (in SI units: m, rad). The
+# examples set their own speed caps (see examples: below).
+api:
+  max_linear_speed: 100        # mm/s     TCP velocity commands
+  max_angular_speed: 30        # deg/s    TCP velocity commands
+  max_joint_speed: 45          # deg/s    every joint, in moves and streaming
+  max_linear_accel: 500        # mm/s^2   how fast velocity commands may change
+  max_angular_accel: 115       # deg/s^2
+
+# --- Gripper feedback (read-only) --------------------------------------------
+gripper:
+  # Status topics of Robotiq2FGripperRtuNode.py (campero_ur10_bringup.launch remaps
+  # it to the first one). All are watched; [] disables the feedback.
+  feedback_topics: [/robotiq_2f_gripper/input, /Robotiq2FGripperRobotInput]
+
+# --- Start-up check of the command link (examples; robot.check_command_link) --
+# Right after connecting, the first commands can take seconds to reach the arm.
+# The examples first move wrist 3 back and forth by `step` and time how long each
+# move takes to show up in /joint_states; they start once `good_moves` moves in a
+# row arrived within `max_delay`, with the wrist back where it was.
+link_check:
+  enabled: true                # false: skip it (the examples also take --no-link-check)
+  step: 1.0                    # deg: size of each wrist-3 move
+  move_time: 0.4               # s: duration of each move
+  max_delay: 0.3               # s: a move counts as prompt if it starts within this
+  good_moves: 3                # prompt moves in a row needed
+  timeout: 20                  # s: give up after this (the example stops with an error)
+
+# --- Plots of the examples (ur10api.viz.Dashboard) ---------------------------
+plots:
+  window: 20                   # s of history in the live plots (the final figure shows it all)
+  fps: 8                       # redraws per second (drawing never delays the control loop)
+  save_dir: runs               # the final figures are saved here (relative to the repository)
+
+# --- Web panel ---------------------------------------------------------------
+panel:
+  listen: "127.0.0.1"          # only this PC can open the panel. "0.0.0.0" shares it with the
+                               # network: anyone who can open it can move the robot.
+  http_port: 8080
+  watchdog: 0.4                # s: a jog stops if the browser stops refreshing it for this long
+  jog_rate: 20                 # Hz: streaming rate of velocity jogs
+  jog_ramp: 0.3                # s: speed ramp-up after pressing a jog button
+  jog_max_joint_speed: 35      # deg/s: joint cap of Cartesian jogs (slows down near singularities)
+  confirm_above: 45            # deg: "Move to" asks for confirmation above this joint displacement
+
+  # Speed sliders
+  linear_speed:    {default: 25, min: 1, max: 100}   # mm/s   Cartesian jog
+  angular_speed:   {default: 5,  min: 1, max: 30}    # deg/s  Cartesian jog
+  joint_jog_speed: {default: 5,  min: 1, max: 30}    # deg/s  joint jog
+  move_speed:      {default: 10, min: 1, max: 60}    # deg/s  max joint speed of "Move to"
+
+  # Step (incremental) jog sizes
+  linear_steps:  {choices: [1, 5, 10, 25, 50], default: 10}   # mm
+  angular_steps: {choices: [0.5, 1, 5, 10], default: 5}       # deg
+  joint_steps:   {choices: [0.5, 1, 5, 10], default: 5}       # deg
+
+  # Joint presets offered in "Move to joints": J1..J6 in deg. Poses saved from
+  # the panel go to saved_poses.json instead.
+  presets:
+    "Force-control start (report 5.3)": [0.27, -90.42, 95.21, -125.32, -90.15, 0.48]
+
+# --- Examples (examples/*.py) --------------------------------------------------
+# Defaults of each example; its command-line options override them (same units).
+examples:
+
+  pose_frames:                 # 01_pose_frames.py: align the TCP with target frames
+    frame: tool                # tool | base: frame in which the target offsets are expressed
+    mode: servo                # servo: Cartesian P-controller | move: one joint move per target
+    gain: 1.5                  # 1/s: servo velocity = gain * pose error
+    max_speed: 40              # mm/s   servo speed cap
+    max_angular_speed: 17      # deg/s  servo speed cap
+    tolerance: 1.0             # mm     a target is reached when the position error
+    angle_tolerance: 0.3       # deg    and the orientation error are below these
+    rate: 25                   # Hz: control rate
+    timeout: 30                # s per target
+    joint_speed: 11.5          # deg/s: move mode
+    targets:                   # offsets from the start pose: position (mm), rotation vector (deg)
+      T1: {position: [60, 0, 0],    rotation: [0, 0, 20]}
+      T2: {position: [0, 60, 30],   rotation: [15, 0, 0]}
+      T3: {position: [-40, -40, 20], rotation: [0, -15, 0]}
+
+  velocity_path:               # 02_velocity_path.py: follow a small flat path
+    shape: infinity              # circle | infinity
+    size: 250                   # mm: radius (circle) or half width (infinity)
+    period: 15                  # s per lap
+    laps: 3
+    plane: tool                # tool: tool XY plane at the start | base: UR base XY plane
+    kp: 2.0                    # 1/s: position feedback, v = v_ref + kp * position error
+    kr: 2.0                    # 1/s: orientation hold, w = kr * rotation error
+    rate: 100                   # Hz: control rate
+    max_speed: 120             # mm/s
+    max_angular_speed: 17      # deg/s
+
+  force_teleop:                # 03_force_teleop.py: push the gripper and the arm follows
+    gain: 4.0                  # mm/s per N above the dead band (admittance)
+    dead_band: 3.0             # N: smaller forces are ignored (noise, gripper weight)
+    max_speed: 50              # mm/s
+    filter: 0.2                # 0-1: low-pass weight of each new sample (smaller = smoother)
+    rate: 50                   # Hz: control rate
+    rotate: false              # also turn with the measured torque
+    torque_gain: 8.6           # deg/s per Nm above the torque dead band
+    torque_dead_band: 0.8      # Nm
+    max_rotation: 30           # deg from the start orientation
+    max_angular_speed: 14      # deg/s
+    invert: false              # move against the measured force (if the arm moves the wrong way)
