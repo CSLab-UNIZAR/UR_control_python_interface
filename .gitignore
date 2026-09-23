@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Leap Motion bindings cloned by install.sh
+leapc-python-bindings/
+
+# Local files kept next to the repository (the report contains lab credentials)
+memoria_practicas.pdf
+UR_CONTROL.zip
+prompt.md
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UR10 Control Panel</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">UR10 <span>Campero</span></div>
+  <form id="connect-form" class="connect" autocomplete="off">
+    <input id="robot-host" type="text" spellcheck="false" title="rosbridge host (Campero PC)">
+    <input id="robot-port" type="number" min="1" max="65535" title="rosbridge port">
+    <button id="connect-btn" type="submit">Connect</button>
+  </form>
+  <div id="status" class="pill"><span class="dot"></span><span id="status-text">Starting…</span></div>
+  <div id="rates" class="muted small"></div>
+  <button id="stop-btn" class="stop" title="Brake to a stop (Esc or Space)">STOP</button>
+</header>
+
+<main class="layout">
+  <section class="column">
+    <div class="card">
+      <h2>Joints <button class="link" id="copy-joints" title="Copy J1..J6 in radians">copy rad</button></h2>
+      <table class="readout" id="joint-table">
+        <thead><tr><th></th><th>Position</th><th></th><th>Velocity</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>TCP pose <small>base frame</small>
+        <button class="link" id="copy-pose" title="Copy [x, y, z, roll, pitch, yaw] in m and rad">copy SI</button></h2>
+      <div class="pose-grid" id="pose-grid"></div>
+      <div id="workspace" class="badge"></div>
+    </div>
+
+    <div class="card">
+      <h2>Gripper</h2>
+      <div class="gripper">
+        <div><div class="muted small">Last command</div><div id="gripper-cmd" class="big">—</div></div>
+        <div><div class="muted small">Feedback</div><div id="gripper-fb" class="small">—</div></div>
+      </div>
+      <div class="row">
+        <button id="grip-open" class="needs-robot">Open <kbd>O</kbd></button>
+        <button id="grip-close" class="needs-robot">Close <kbd>C</kbd></button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Force / torque <button class="link needs-robot" id="zero-ft" title="Call the SET ZERO service of the sensor">zero sensor</button></h2>
+      <div class="ft-values" id="ft-values"></div>
+      <canvas id="ft-chart"></canvas>
+    </div>
+  </section>
+
+  <section class="column wide">
+    <div class="tabbed">
+    <nav class="tabs">
+      <button data-tab="jog" class="active">Jog</button>
+      <button data-tab="joints">Move to joints</button>
+      <button data-tab="pose">Move to pose</button>
+    </nav>
+
+    <div class="card tab" id="tab-jog">
+      <div class="options">
+        <div class="seg" data-name="space"><button data-value="cartesian" class="on">Cartesian</button><button data-value="joint">Joint</button></div>
+        <div class="seg only-cartesian" data-name="frame"><button data-value="base" class="on">Base frame</button><button data-value="tool">Tool frame</button></div>
+        <div class="seg" data-name="mode"><button data-value="continuous" class="on">Continuous (hold)</button><button data-value="step">Step (click)</button></div>
+      </div>
+      <div class="settings">
+        <label class="only-cartesian">Linear speed <input type="range" id="linear-speed"><output></output></label>
+        <label class="only-cartesian">Angular speed <input type="range" id="angular-speed"><output></output></label>
+        <label class="only-joint">Joint speed <input type="range" id="joint-speed"><output></output></label>
+        <label class="only-cartesian only-step">Linear step <select id="linear-step"></select></label>
+        <label class="only-cartesian only-step">Angular step <select id="angular-step"></select></label>
+        <label class="only-joint only-step">Joint step <select id="joint-step"></select></label>
+      </div>
+      <div class="pad" id="pad"></div>
+      <div class="jog-footer">
+        <label class="check"><input type="checkbox" id="keyboard-jog" checked> Keyboard jog</label>
+        <span class="muted small">Hold <kbd>Q</kbd>/<kbd>A</kbd> … <kbd>Y</kbd>/<kbd>H</kbd> (shown on the buttons) ·
+          <kbd>O</kbd>/<kbd>C</kbd> gripper · <kbd>Esc</kbd>/<kbd>Space</kbd> STOP</span>
+      </div>
+      <div id="jog-status" class="status-line"></div>
+    </div>
+
+    <div class="card tab" id="tab-joints" hidden>
+      <div class="row">
+        <select id="pose-select" title="Presets and saved poses"></select>
+        <button id="pose-load">Load</button>
+        <button id="pose-save" class="needs-robot" title="Save the current joint positions">Save current…</button>
+        <button id="pose-delete">Delete</button>
+      </div>
+      <table class="targets" id="joint-targets">
+        <thead><tr><th>Joint</th><th>Current</th><th>Target (°)</th><th>Δ</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="row">
+        <button class="copy-current needs-robot" data-kind="joints">Copy current</button>
+        <label class="grow">Max joint speed <input type="range" class="move-speed"><output></output></label>
+      </div>
+      <div class="preview" id="preview-joints"></div>
+      <div class="actions"><button class="primary needs-robot move-btn" data-kind="joints">Move to joint target</button></div>
+    </div>
+
+    <div class="card tab" id="tab-pose" hidden>
+      <table class="targets" id="pose-targets">
+        <thead><tr><th>Axis</th><th>Current</th><th>Target</th><th>Δ</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="row">
+        <button class="copy-current needs-robot" data-kind="pose">Copy current</button>
+        <label class="grow">Max joint speed <input type="range" class="move-speed"><output></output></label>
+      </div>
+      <div class="preview" id="preview-pose"></div>
+      <p class="muted small">The target is reached with a single joint-space motion
+        (<code>UR10Control.send_trajectory</code>), so the TCP path is not a straight line.</p>
+      <div class="actions"><button class="primary needs-robot move-btn" data-kind="pose">Move to pose target</button></div>
+    </div>
+    </div>
+
+    <div class="card log">
+      <h2>Log</h2>
+      <div id="log"></div>
+    </div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
