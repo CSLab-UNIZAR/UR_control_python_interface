@@ -4,7 +4,8 @@
 
 .DESCRIPTION
     Uses the Windows "py" launcher to find a supported Python (3.12 preferred,
-    then 3.13, 3.11, 3.10). An existing .venv is reused and updated.
+    then 3.13, 3.11, 3.10, 3.14). An existing .venv is reused and updated.
+    On Linux use ./setup.sh instead.
 
 .EXAMPLE
     .\setup.ps1                 # automatic Python selection
@@ -17,7 +18,7 @@ param(
 )
 
 Set-Location -Path $PSScriptRoot
-$Supported = @("3.12", "3.13", "3.11", "3.10")   # numpy 2.2 / scipy 1.15 have no wheels for 3.14
+$Supported = @("3.12", "3.13", "3.11", "3.10", "3.14")   # in order of preference
 $VenvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 
 function Fail([string]$Message) {
@@ -55,6 +56,9 @@ Write-Host "Using Python $Version ($PyExe $PyPrefix)" -ForegroundColor Cyan
 if ($Recreate -and (Test-Path ".venv")) {
     Write-Host "Removing the existing .venv ..."
     Remove-Item -Recurse -Force ".venv"
+}
+if ((Test-Path ".venv") -and -not (Test-Path $VenvPython)) {
+    Fail "The existing .venv was not created on Windows (e.g. it comes from Linux). Run: .\setup.ps1 -Recreate"
 }
 if (Test-Path $VenvPython) {
     $venvVersion = Get-PythonVersion $VenvPython @()

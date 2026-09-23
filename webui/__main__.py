@@ -3,6 +3,7 @@
 import argparse
 import io
 import logging
+import os
 import sys
 import threading
 import webbrowser
@@ -40,6 +41,14 @@ class _PrintsToLog(io.TextIOBase):
             level = logging.WARNING if ("error" in lowered or "out of workspace" in lowered) else logging.INFO
             self._logger.log(level, line)
         return len(text)
+
+
+def _can_open_browser():
+    """Without a display, webbrowser falls back to text-mode browsers (lynx, w3m...)
+    that would take over this terminal, so only open one on a desktop session."""
+    if sys.platform.startswith("linux"):
+        return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return True
 
 
 def main():
@@ -88,8 +97,10 @@ def main():
 
     if not args.no_connect:
         link.connect_async(args.host, args.port)
-    if not args.no_browser:
+    if not args.no_browser and _can_open_browser():
         threading.Timer(0.5, webbrowser.open, (url,)).start()
+    elif not args.no_browser:
+        log.info("No desktop display found: open %s in a browser", url)
 
     try:
         server.serve_forever()

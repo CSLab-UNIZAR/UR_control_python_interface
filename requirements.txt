@@ -1,14 +1,18 @@
-# UR_CONTROL Python requirements (Windows and Linux, Python 3.10 - 3.13)
+# UR_CONTROL Python requirements (Windows and Linux, Python 3.10 - 3.14)
 #
-# Windows: run setup.bat (or setup.ps1), which creates .venv and installs this file.
-# Manual:  python -m pip install -r requirements.txt
+# Windows: setup.bat (or setup.ps1)   Linux: ./setup.sh
+# Both create .venv and install this file. Manual: python -m pip install -r requirements.txt
 #
 # Only direct dependencies are listed; pip resolves the rest. Versions are the
-# ones UR_CONTROL was validated with on the Campero.
+# ones UR_CONTROL was validated with on the Campero (Python 3.10 - 3.13).
+# Python 3.14 (e.g. Ubuntu 26.04) needs the first numpy/scipy releases with
+# 3.14 wheels; that combination is tested offline only.
 
 # --- Core framework (core/) and web panel (webui/) ----------------------------
-numpy==2.2.6
-scipy==1.15.3
+numpy==2.2.6; python_version < "3.14"
+numpy==2.3.5; python_version >= "3.14"
+scipy==1.15.3; python_version < "3.14"
+scipy==1.16.3; python_version >= "3.14"
 matplotlib==3.10.8           # robot plots (core/plots.py, spacemouse display)
 spatialmath-python==1.1.15   # SE3 / RPY rotations (core/conversions.py, controllers)
 roslibpy==2.0.0              # rosbridge websocket client used by UR10Control

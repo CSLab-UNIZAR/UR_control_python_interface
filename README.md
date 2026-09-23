@@ -22,7 +22,7 @@ On top of the framework there are:
 
 1. [How it works](#how-it-works)
 2. [Repository layout](#repository-layout)
-3. [Quick start on Windows](#quick-start-on-windows)
+3. [Quick start (Windows and Linux)](#quick-start-windows-and-linux)
 4. [Robot-side start-up (Campero PC)](#robot-side-start-up-campero-pc)
 5. [Web control panel](#web-control-panel)
 6. [Other controllers](#other-controllers)
@@ -31,8 +31,7 @@ On top of the framework there are:
 9. [Updating the robot model](#updating-the-robot-model)
 10. [Safety](#safety)
 11. [Troubleshooting](#troubleshooting)
-12. [Linux](#linux)
-13. [Credits](#credits)
+12. [Credits](#credits)
 
 ---
 
@@ -118,7 +117,9 @@ docs/                 images for this README
 requirements.txt      pinned Python dependencies
 setup.bat, setup.ps1  Windows: create .venv and install the requirements
 run_webui.bat         Windows: start the web panel
-install.sh            Ubuntu installer (original, incl. Leap Motion bindings)
+setup.sh              Linux: create .venv and install the requirements
+run_webui.sh          Linux: start the web panel
+install.sh            Ubuntu: full install incl. SpaceMouse and Leap Motion system packages (original)
 ```
 
 The panel does not modify `core/`. Every command goes out through
@@ -129,11 +130,18 @@ solves the IK itself with the calibrated model and sends the resulting joint tar
 
 ---
 
-## Quick start on Windows
+## Quick start (Windows and Linux)
+
+Supported: Windows 10/11 and Ubuntu 22.04 / 24.04 / 26.04, with Python 3.10–3.14
+(3.12 recommended). The setup scripts pick a suitable Python by themselves.
+Python 3.10–3.13 get the versions validated on the Campero (numpy 2.2.6, scipy
+1.15.3). Python 3.14, the default on Ubuntu 26.04, gets numpy 2.3.5 and scipy 1.16.3,
+the first releases built for it; that combination is tested offline only.
+
+### Windows
 
 1. **Install Python 3.12** from [python.org](https://www.python.org/downloads/windows/)
-   (keep the default *py launcher* option). Python 3.10–3.13 work; 3.14 does not,
-   because the pinned numpy/scipy have no wheels for it.
+   (keep the default *py launcher* option).
 2. **Get the code**
    ```powershell
    git clone https://github.com/nachocz/UR10_contro_python_interface_campero.git
@@ -161,6 +169,41 @@ python -m webui --host CMP00-180723AD.local
 > If PowerShell refuses to run `Activate.ps1`, allow local scripts once with
 > `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or use `cmd.exe`.
 > `setup.bat` and `run_webui.bat` do not need activation.
+
+### Linux (Ubuntu)
+
+1. **Install git, Python and its venv module** (Ubuntu's default Python is fine):
+   ```bash
+   sudo apt install git python3 python3-venv
+   ```
+2. **Get the code**
+   ```bash
+   git clone https://github.com/nachocz/UR10_contro_python_interface_campero.git
+   cd UR10_contro_python_interface_campero
+   ```
+3. **Create the environment**: `./setup.sh`. It picks a supported Python, creates
+   `.venv`, installs `requirements.txt` and checks that the framework imports; no
+   `sudo` needed. Options: `--recreate` (rebuild `.venv`), `--python python3.11`
+   (force an interpreter).
+4. **Start the robot side** ([next section](#robot-side-start-up-campero-pc)) and
+   connect the PC to the Campero's Wi‑Fi network.
+5. **Start the panel**: `./run_webui.sh`. On a desktop session the browser opens
+   <http://localhost:8080>; otherwise (e.g. over SSH) open that address yourself.
+   Press `Ctrl+C` in the terminal to quit.
+
+Manual equivalent of steps 3 and 5:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m webui --host CMP00-180723AD.local
+```
+
+For the SpaceMouse and Leap Motion controllers, `sudo bash install.sh` (the original
+installer) also installs their system packages (hidapi, evtest, Ultraleap tracking)
+and builds the Leap Motion Python bindings into `.venv`; see
+[Other controllers](#other-controllers).
 
 ---
 
@@ -202,7 +245,7 @@ connect to the Campero CPU, power the CPU first and the arm about 5 s later.
 ## Web control panel
 
 ```text
-run_webui.bat [options]        or        python -m webui [options]
+run_webui.bat [options]   (Windows)   ./run_webui.sh [options]   (Linux)   or   python -m webui [options]
 
   --host HOST          rosbridge host              (default CMP00-180723AD.local)
   --port PORT          rosbridge port              (default 9090)
@@ -417,8 +460,9 @@ the bottom of the page and in the console.
 ## Other controllers
 
 Run from the repository root with the environment active
-(`.venv\Scripts\activate`). They connect to `CMP00-180723AD.local`; the host is
-hard-coded near the top of each script.
+(Windows: `.venv\Scripts\activate`; Linux: `source .venv/bin/activate`). They
+connect to `CMP00-180723AD.local`; the host is hard-coded near the top of each
+script.
 
 ```powershell
 python -m controllers.key_controller          # terminal keyboard control
@@ -443,7 +487,8 @@ clear.
 - **SpaceMouse**: `pyspacemouse` loads the native *hidapi* library. On Windows,
   download `hidapi-win.zip` from the [hidapi releases](https://github.com/libusb/hidapi/releases)
   and put `x64\hidapi.dll` in the repository folder (or any folder on `PATH`). On
-  Linux, stop the device from moving the mouse pointer with
+  Linux, install the library with `sudo apt install libhidapi-hidraw0` (install.sh
+  installs `libhidapi-dev`). Stop the device from moving the mouse pointer with
   `sudo evtest --grab /dev/input/eventXX` (find XX with `cat /proc/bus/input/devices`),
   and if permissions fail run `sudo chmod 666 /dev/hidraw*`.
 - **Leap Motion**: install the Ultraleap *Hand Tracking* software, then build the
@@ -565,6 +610,9 @@ the calibration changes (for example after copying a new
 .venv\Scripts\python tools\build_robot_model.py --src <path to catkin_ws>\src
 ```
 
+On Linux: `.venv/bin/python -m pip install xacro==2.1.1 trimesh pycollada`, then
+`.venv/bin/python tools/build_robot_model.py --src <path to catkin_ws>/src`.
+
 The tool finds the ROS packages under `--src` by their `package.xml`, so ROS does not
 need to be installed. Use `--xacro` for a different robot file.
 
@@ -597,21 +645,13 @@ need to be installed. Use `--xacro` for a different robot file.
 | *3D view unavailable* | The browser has WebGL disabled: enable hardware acceleration, or use a current Edge/Chrome/Firefox. |
 | Pose differs from the pendant | Different TCP and orientation format: see [Comparing with the teach pendant](#comparing-with-the-teach-pendant). |
 | `setup.bat`: *No supported Python found* | Install Python 3.12 (python.org) with the py launcher. |
-| `run_webui.bat`: port already in use | The panel is already open, or use `--http-port 8081`. |
-
----
-
-## Linux
-
-On Ubuntu 22.04, `sudo bash install.sh` (original installer) creates `.venv` and
-installs the requirements plus the SpaceMouse and Leap Motion dependencies.
-Manually:
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python3 -m webui
-```
+| `run_webui.bat` / `run_webui.sh`: port already in use | The panel is already open, or use `--http-port 8081`. |
+| `./setup.sh`: *Could not create the virtual environment* | Install the venv module it names, e.g. `sudo apt install python3.12-venv`. |
+| `./setup.sh`: *Permission denied* | The executable bit was lost (e.g. copied from a zip): `chmod +x *.sh`, or run `bash setup.sh`. |
+| `$'\r': command not found` | The scripts got Windows line endings (copied through Windows): clone with git on Linux, or `sed -i 's/\r$//' *.sh`. |
+| *The existing .venv was not created on this system* | The folder is shared between Windows and Linux: run `./setup.sh --recreate` (or `.\setup.ps1 -Recreate`). |
+| Linux: `Cannot connect … Name or service not known` | `.local` names need mDNS: `sudo apt install avahi-daemon libnss-mdns`, or use the IP with `--host`. |
+| Linux: no browser opens | No desktop session (SSH, container): open <http://localhost:8080> yourself, or forward it with `ssh -L 8080:localhost:8080 user@pc`. |
 
 ---
 
