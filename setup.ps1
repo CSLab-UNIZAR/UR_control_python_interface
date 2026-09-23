@@ -79,11 +79,23 @@ if ($LASTEXITCODE -ne 0) { Fail "Upgrading pip failed (check the internet connec
 & $VenvPython -m pip install -r requirements.txt --disable-pip-version-check
 if ($LASTEXITCODE -ne 0) { Fail "Installing requirements.txt failed." }
 
-# --- 4. Check that the framework and the panel import -------------------------------------
-& $VenvPython -c "import core.ur_control, webui.robot, webui.server; print('Import check: OK')"
-if ($LASTEXITCODE -ne 0) { Fail "The packages installed, but UR_CONTROL does not import (see the error above)." }
+# --- 4. Make the repository importable from any folder (ur10api for your own scripts) --------
+$Site = & $VenvPython -c "import sysconfig; print(sysconfig.get_paths()['purelib'])"
+[System.IO.File]::WriteAllText((Join-Path $Site "ur_control.pth"), "$PSScriptRoot`n", (New-Object System.Text.UTF8Encoding $false))
+
+# --- 5. Check that everything imports, from another folder ---------------------------------------
+Push-Location ([System.IO.Path]::GetTempPath())
+& $VenvPython -c "import core.ur_control, ur10api, webui.robot, webui.server; print('Import check: OK')"
+$ImportCode = $LASTEXITCODE
+Pop-Location
+if ($ImportCode -ne 0) { Fail "The packages installed, but UR_CONTROL does not import (see the error above)." }
+& $VenvPython -c "import tkinter" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Note: tkinter is missing, so the ur10api examples cannot open plot windows (reinstall Python with 'tcl/tk and IDLE')." -ForegroundColor Yellow
+}
 
 Write-Host ""
 Write-Host "Setup complete." -ForegroundColor Green
 Write-Host "  Web panel:     run_webui.bat   (or  .venv\Scripts\python -m webui)"
 Write-Host "  Activate venv: .venv\Scripts\Activate.ps1   (cmd: .venv\Scripts\activate.bat)"
+Write-Host "  Python API:    see docs\ur10api.md and examples\"

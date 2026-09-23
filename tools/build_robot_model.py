@@ -3,8 +3,8 @@
 Expands the robot xacro (as campero_ur10_bringup.launch does, including the
 arm calibration), then writes for the browser:
 
-  webui/static/robot/model.json   kinematic tree: links, visuals, joints
-  webui/static/robot/meshes.glb   every visual mesh, one node per mesh
+  robot_model/model.json   kinematic tree: links, visuals, joints (also used by ur10api)
+  robot_model/meshes.glb   every visual mesh, one node per mesh (3D view of the web panel)
 
 Only needed when the robot description changes. Requires (not part of
 requirements.txt):  pip install xacro==2.1.1 trimesh pycollada
@@ -180,7 +180,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--src", required=True, help="catkin workspace src folder")
     parser.add_argument("--xacro", default=DEFAULT_XACRO, help="robot xacro, relative to --src")
-    parser.add_argument("--out", default=str(ROOT / "webui" / "static" / "robot"), help="output folder")
+    parser.add_argument("--out", default=str(ROOT / "robot_model"), help="output folder")
     args = parser.parse_args()
     build(args.src, args.xacro, Path(args.out))
 

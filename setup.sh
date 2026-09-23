@@ -70,13 +70,20 @@ echo "Installing requirements (this can take a few minutes the first time) ..."
 "$VENV_PY" -m pip install -r requirements.txt --disable-pip-version-check \
   || fail "Installing requirements.txt failed."
 
-# --- 4. Check that the framework and the panel import ---------------------------------------
-"$VENV_PY" -c "import core.ur_control, webui.robot, webui.server; print('Import check: OK')" \
+# --- 4. Make the repository importable from any folder (ur10api for your own scripts) --------
+SITE="$("$VENV_PY" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+printf '%s\n' "$PWD" > "$SITE/ur_control.pth"
+
+# --- 5. Check that everything imports, from another folder ---------------------------------------
+(cd /tmp && "$OLDPWD/$VENV_PY" -c "import core.ur_control, ur10api, webui.robot, webui.server; print('Import check: OK')") \
   || fail "The packages installed, but UR_CONTROL does not import (see the error above)."
+"$VENV_PY" -c "import tkinter" 2>/dev/null \
+  || echo "Note: the ur10api examples need Tk for their plot windows: sudo apt install python3-tk"
 
 cat <<'EOF'
 
 Setup complete.
   Web panel:     ./run_webui.sh   (or  .venv/bin/python -m webui)
   Activate venv: source .venv/bin/activate
+  Python API:    see docs/ur10api.md and examples/
 EOF

@@ -11,6 +11,9 @@ On top of the framework there are:
   step), move to joint or pose targets, open and close the gripper, and read joint
   states, TCP pose, gripper state and force/torque live, all from the browser. A
   **3D view** shows the Campero and the arm like RViz, built from the robot's URDF;
+- a **Python API** (`ur10api/`) for your own control code: read joints, TCP pose,
+  force/torque and gripper, and send position or velocity commands, with three
+  example programs (`examples/`) and a [developer guide](docs/ur10api.md);
 - the original **controllers**: terminal keyboard, 3Dconnexion SpaceMouse, Leap
   Motion hand gestures and force-guided motion.
 
@@ -25,13 +28,14 @@ On top of the framework there are:
 3. [Quick start (Windows and Linux)](#quick-start-windows-and-linux)
 4. [Robot-side start-up (Campero PC)](#robot-side-start-up-campero-pc)
 5. [Web control panel](#web-control-panel)
-6. [Other controllers](#other-controllers)
-7. [Framework reference](#framework-reference)
-8. [Configuration](#configuration)
-9. [Updating the robot model](#updating-the-robot-model)
-10. [Safety](#safety)
-11. [Troubleshooting](#troubleshooting)
-12. [Credits](#credits)
+6. [Python API for your own control code](#python-api-for-your-own-control-code)
+7. [Other controllers](#other-controllers)
+8. [Framework reference](#framework-reference)
+9. [Configuration](#configuration)
+10. [Updating the robot model](#updating-the-robot-model)
+11. [Safety](#safety)
+12. [Troubleshooting](#troubleshooting)
+13. [Credits](#credits)
 
 ---
 
@@ -86,9 +90,9 @@ the average speed [rad/s] of the joint that moves the most.
 UR_CONTROL computes FK/IK with the **nominal** UR10 parameters. The controller,
 the pendant and RViz use this arm's **factory calibration**
 (`campero_ur10_calibration.yaml`, loaded into the URDF by the bring-up). The two
-differ by **3–6 mm and up to 0.8°** at the flange. The web panel uses the
-calibrated model (see [Web control panel](#web-control-panel)); the original
-controllers keep the nominal one.
+differ by **3–6 mm and up to 0.8°** at the flange. The web panel and `ur10api`
+use the calibrated model (see [Web control panel](#web-control-panel)); the
+original controllers keep the nominal one.
 
 ---
 
@@ -102,18 +106,24 @@ core/                 framework
   conversions.py        pose / quaternion / RPY conversions
   plots.py, spacemouse.py, leap_gestures*.py, trajectory.py, ros_structs.py
 controllers/          original controllers (keyboard, SpaceMouse, Leap Motion, force)
+ur10api/              Python API for your own control code (docs/ur10api.md)
+  robot.py              Robot: state, position/velocity commands, gripper, sensor, stop
+  kinematics.py         calibrated FK/IK (ArmModel) and workspace box (Workspace)
+  transforms.py         pose helpers (trans, rotz, displace, pose_error, ...)
+  viz.py                FrameView: live 3D plot of the arm, frames and paths
+examples/             ur10api demos: pose control, velocity path, force teleoperation
 webui/                web control panel  ->  python -m webui
   config.py             speeds, limits, rates, TCP, presets (edit here)
   robot.py              connection + monitoring + motion logic
-  kinematics.py         calibrated arm FK/IK and pose helpers
+  kinematics.py         ur10api's kinematics with the panel's TCP and workspace
   server.py             local HTTP server and JSON API
   static/               page (index.html, app.js, app.css) and 3D view (viewer.js)
-    robot/              robot model for the 3D view and kinematics (generated)
     vendor/three/       three.js r186 (MIT), served locally
+robot_model/          Campero URDF with the arm calibration (model.json, meshes.glb; generated)
 tools/
-  build_robot_model.py  regenerates webui/static/robot from the catkin workspace
+  build_robot_model.py  regenerates robot_model/ from the catkin workspace
 other/                SpaceMouse button maps
-docs/                 images for this README
+docs/                 ur10api guide and images for this README
 requirements.txt      pinned Python dependencies
 setup.bat, setup.ps1  Windows: create .venv and install the requirements
 run_webui.bat         Windows: start the web panel
@@ -122,10 +132,10 @@ run_webui.sh          Linux: start the web panel
 install.sh            Ubuntu: full install incl. SpaceMouse and Leap Motion system packages (original)
 ```
 
-The panel does not modify `core/`. Every command goes out through
+Neither the panel nor `ur10api` modifies `core/`. Every command goes out through
 `UR10Control.send_trajectory` and `send_gripper_cmd`, so the Campero receives the
-same message format as with the other controllers. For Cartesian commands, the panel
-solves the IK itself with the calibrated model and sends the resulting joint target
+same message format as with the other controllers. For Cartesian commands, the IK
+is solved with the calibrated model and the resulting joint target is sent
 (`art=True`).
 
 ---
@@ -377,7 +387,7 @@ values as the Pose card, and a dashed line drops from it to the XY plane.
 - Views: *iso*, *side*, *top*, *rear*. Drag to rotate, right-drag to pan, wheel to
   zoom. The view only redraws when something changes.
 
-The model files (`webui/static/robot/`) are generated from the catkin workspace; see
+The model files (`robot_model/`) are generated from the catkin workspace; see
 [Updating the robot model](#updating-the-robot-model).
 
 ### Jog tab: velocity and step commands
@@ -454,6 +464,38 @@ and it is **not an emergency stop**: keep the teach-pendant E-stop within reach.
 Commands sent, warnings (workspace, IK, stopped jogs), connection events and
 messages printed by `UR10Control` (e.g. *Out of workspace limits*) are listed at
 the bottom of the page and in the console.
+
+---
+
+## Python API for your own control code
+
+`ur10api` wraps everything the panel does in a small Python interface, so you can
+write your own control processes. The full guide is
+[docs/ur10api.md](docs/ur10api.md): setup, concepts, API reference, control-loop
+pattern and examples.
+
+```python
+from ur10api import Rate, Robot
+
+with Robot("CMP00-180723AD.local") as robot:
+    state = robot.state()                       # joints, TCP pose, force/torque, gripper
+    robot.move_tcp_by(dp=(0, 0, 0.05))          # position command (blocking)
+    rate = Rate(25)
+    for _ in range(50):                         # velocity command, 2 s at 20 mm/s
+        robot.set_tcp_velocity(v=(0.02, 0, 0))
+        rate.sleep()
+    robot.stop()
+```
+
+| Example | Shows |
+|---|---|
+| `examples/01_pose_frames.py` | pose control: the TCP aligns with three frames defined in the tool or base frame (P-controller on velocity, or joint moves), with a live 3D view |
+| `examples/02_velocity_path.py` | velocity control: the TCP follows a small circle or an infinity shape (feed-forward + P feedback), then plots the tracking error |
+| `examples/03_force_teleop.py` | compliant teleoperation: push the gripper and the arm follows the force/torque sensor (admittance control) |
+
+Run them from the repository root, e.g. `python examples/01_pose_frames.py --help`.
+The setup scripts register the repository in `.venv`, so `import ur10api` also
+works from your own folders.
 
 ---
 
@@ -598,8 +640,8 @@ and stored in `workspace_limits.json`; saved joint poses go to `saved_poses.json
 
 ## Updating the robot model
 
-The 3D view and the panel kinematics read `webui/static/robot/model.json` and
-`meshes.glb`. Both are generated from the Campero catkin workspace: the robot
+The 3D view and the kinematics of `ur10api` (and so of the panel) read
+`robot_model/model.json` and `meshes.glb`. Both are generated from the Campero catkin workspace: the robot
 description `campero_DLO.urdf.xacro`, expanded with the arm calibration exactly as
 `campero_ur10_bringup.launch` does. Regenerate them when the robot description or
 the calibration changes (for example after copying a new

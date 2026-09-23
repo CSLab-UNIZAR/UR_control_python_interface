@@ -19,14 +19,11 @@ import numpy as np
 import roslibpy
 
 from core.ur_control import UR10Control
+from ur10api.robot import ARM_JOINT_INDEX, GripperState
 from webui import config
 from webui import kinematics as kin
 
 log = logging.getLogger("webui")
-
-# UR10Control.joint_states_callback reads J1..J6 from these indices of the
-# /joint_states arrays; the monitor uses the same mapping for velocities.
-ARM_JOINT_INDEX = (-4, -5, -6, -3, -2, -1)
 
 PHASE_TEXT = {
     "disconnected": "not connected",
@@ -36,8 +33,6 @@ PHASE_TEXT = {
     "stale": "no fresh /joint_states from the robot",
     "lost": "connection lost, reconnecting",
 }
-
-_GRIPPER_OBJECT = {0: "moving", 1: "stopped while opening", 2: "object grasped", 3: "at requested position"}
 
 
 class NotReady(RuntimeError):
@@ -205,16 +200,8 @@ class RobotLink:
 
     def _on_gripper(self, msg):
         try:
-            # Same scale as pub_gripper_cmd.py on the Campero: gPO 13 = open (85 mm), 230 = closed
-            closed = min(max((int(msg.get("gPO", 0)) - 13) / (230 - 13), 0.0), 1.0)
-            if int(msg.get("gFLT", 0)):
-                text = f"fault 0x{int(msg['gFLT']):02X}"
-            elif int(msg.get("gSTA", 0)) != 3:
-                text = "not activated"
-            else:
-                text = (f"gap {(1 - closed) * 85:.0f} mm, "
-                        f"{_GRIPPER_OBJECT.get(int(msg.get('gOBJ', 0)), 'unknown')}")
-            self._gripper_feedback = (time.monotonic(), text, closed)
+            gripper = GripperState.from_msg(msg)
+            self._gripper_feedback = (time.monotonic(), gripper.text, gripper.closed)
         except (TypeError, ValueError):
             log.debug("Unexpected gripper feedback message", exc_info=True)
 

@@ -16,6 +16,7 @@ from webui.robot import PHASE_TEXT, MotionError, NotReady
 log = logging.getLogger("webui")
 
 STATIC_DIR = Path(__file__).with_name("static").resolve()
+MODEL_DIR = (Path(__file__).resolve().parents[1] / "robot_model").resolve()   # served under /robot/
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
@@ -23,7 +24,7 @@ CONTENT_TYPES = {
     ".json": "application/json",
     ".glb": "model/gltf-binary",
 }
-CACHED_DIRS = ("vendor", "robot")   # large files that only change with a new version
+CACHED_DIRS = ("vendor",)   # large files that only change with a new version (and the robot model)
 
 
 def _pendant_view(T):
@@ -59,9 +60,9 @@ class Api:
             "confirm_above_deg": config.CONFIRM_ABOVE_DEG,
             "joint_names": kin.JOINT_NAMES,
             "viewer": {   # used by the 3D view
-                "arm_joints": config.ARM_JOINTS,
-                "base_frame": config.ARM_BASE_FRAME,
-                "flange_frame": config.FLANGE_FRAME,
+                "arm_joints": kin.ARM_JOINTS,
+                "base_frame": kin.BASE_FRAME,
+                "flange_frame": kin.FLANGE_FRAME,
                 "tcp": config.TCP,
                 "workspace": _limits_json(kin.workspace_limits()),
                 "workspace_defaults": _limits_json(kin.DEFAULT_WORKSPACE),
@@ -193,10 +194,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send_static(url.path)
 
     def _send_static(self, url_path):
-        path = (STATIC_DIR / (url_path.lstrip("/") or "index.html")).resolve()
-        if STATIC_DIR not in path.parents or not path.is_file() or path.suffix not in CONTENT_TYPES:
+        base, rel = (MODEL_DIR, url_path[len("/robot/"):]) if url_path.startswith("/robot/") \
+            else (STATIC_DIR, url_path.lstrip("/") or "index.html")
+        path = (base / rel).resolve()
+        if base not in path.parents or not path.is_file() or path.suffix not in CONTENT_TYPES:
             return self._send_json({"ok": False, "error": "not found"}, HTTPStatus.NOT_FOUND)
-        cache = "max-age=3600" if path.relative_to(STATIC_DIR).parts[0] in CACHED_DIRS else "no-store"
+        cache = "max-age=3600" if base is MODEL_DIR or path.relative_to(STATIC_DIR).parts[0] in CACHED_DIRS \
+            else "no-store"
         self._send(HTTPStatus.OK, path.read_bytes(), CONTENT_TYPES[path.suffix], cache)
 
     def do_POST(self):
