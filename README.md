@@ -201,14 +201,38 @@ One robot connection per run: to change robot, restart the panel.
 ### Robot state (left column)
 
 - **Joints**: J1–J6 in degrees and radians, plus velocity (°/s).
-- **TCP pose**: position [mm] and roll/pitch/yaw [°] of the TCP in the UR10 base
-  frame, and whether it lies inside the workspace limits.
+- **Pose**: position [mm] of the TCP (or of the bare flange) in the UR10 base
+  frame. Orientation is shown as roll/pitch/yaw [°] or as a rotation vector [rad].
+  The card also shows whether the TCP lies inside the workspace limits
+  (see [Comparing with the teach pendant](#comparing-with-the-teach-pendant)).
 - **Gripper**: last command sent, and feedback (percentage closed, object detected, faults) when
   `/Robotiq2FGripperRobotInput` is published. Otherwise it shows *no feedback topic*.
 - **Force / torque**: current values and a 10 s chart; **zero sensor** calls the
   SET ZERO service.
 - **copy rad / copy SI** copy the joints (rad) or the pose `[x, y, z, roll, pitch, yaw]`
   (m, rad) as a Python list.
+
+### Comparing with the teach pendant
+
+By default the two show different things:
+
+| | Pendant (Move tab) | Panel / UR_CONTROL |
+|---|---|---|
+| Point | TCP set in *Installation → TCP* (by default the bare flange) | flange + 150 mm along tool Z (`tcp_offset` in `core/ur10_core.py`) |
+| Orientation | rotation vector RX, RY, RZ [rad] | roll/pitch/yaw [°] |
+
+To compare like with like:
+
+1. On the pendant, set *Feature* to **Base**.
+2. In the panel's Pose card, select **Flange**, or TCP if the pendant's TCP is also
+   150 mm along Z.
+3. Select **Rot. vector rad** in the panel, or set the pendant to *RPY [°]*
+   (UR's RPY uses the same convention as the panel).
+
+Joint angles should then agree to about 0.01°, and positions to a few millimetres:
+UR_CONTROL uses the nominal UR10 kinematics, while the pendant uses the robot's factory
+calibration. Near 180°, the rotation vectors (π, 0, 0) and (−π, 0, 0) are the same
+orientation, and so are roll +180° and −180°.
 
 ### Jog tab: velocity and step commands
 
@@ -432,6 +456,7 @@ Panel settings live in `webui/config.py`. The most relevant ones:
 | Worked once, not after reconnecting | Restart the rosbridge launch on the Campero. |
 | *No IK solution* / *IK jump* | Pose outside the IK branch or near a singularity: jog in joint space. |
 | *Blocked at the workspace limit* | Limits are in `WORKSPACE_LIMITS` (`core/ur10_core.py`). |
+| Pose differs from the pendant | Different TCP and orientation format: see [Comparing with the teach pendant](#comparing-with-the-teach-pendant). |
 | `setup.bat`: *No supported Python found* | Install Python 3.12 (python.org) with the py launcher. |
 | `run_webui.bat`: port already in use | The panel is already open, or use `--http-port 8081`. |
 

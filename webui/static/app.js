@@ -10,6 +10,7 @@ const FT_WINDOW_S = 10;
 const S = {
   cfg: null, state: null, logSince: 0, serverUp: true,
   space: "cartesian", frame: "base", mode: "continuous", tab: "jog",
+  posePoint: "tcp", poseRot: "rpy",   // pose card: TCP or flange, RPY or rotation vector
   held: new Map(),            // "axis,dir" -> Set of sources (pointer / keys)
   keepalive: null,
   ft: [],                     // [time, fx, fy, fz, mx, my, mz]
@@ -92,7 +93,7 @@ function buildPage() {
   });
   POSE_FIELDS.forEach(([name, unit], i) => {
     $("#pose-grid").insertAdjacentHTML("beforeend",
-      `<div><span class="${AXIS_CLASS[i % 3]}">${name} (${unit})</span><b id="pose-${i}">—</b></div>`);
+      `<div><span class="${AXIS_CLASS[i % 3]}" id="pose-label-${i}">${name} (${unit})</span><b id="pose-${i}">—</b></div>`);
     $("#pose-targets tbody").insertAdjacentHTML("beforeend",
       `<tr><td>${name} <span class="muted small">${unit}</span></td><td class="num" id="pt-cur-${i}">—</td>
        <td class="num"><input type="number" step="${i < 3 ? 1 : 0.5}" id="pt-${i}"></td>
@@ -311,12 +312,18 @@ function render(st) {
   if (!ready && S.held.size) releaseAll();
 
   const has = Array.isArray(st.q_deg);
+  const view = has ? st.pendant[S.posePoint] : null;
+  const rotvec = S.poseRot === "rotvec";
+  setText("tcp-point", has ? `TCP (+${fmt(st.pendant.tcp_offset_mm, 0)} mm)` : "TCP");
   for (let i = 0; i < 6; i++) {
     setText(`q-deg-${i}`, has ? fmt(st.q_deg[i], 2) + "°" : "—");
     setText(`q-rad-${i}`, has ? fmt(st.q_rad[i], 4) + " rad" : "");
     setText(`qd-${i}`, has && st.qd_deg_s ? signed(st.qd_deg_s[i], 1) + " °/s" : "");
-    const pose = has ? (i < 3 ? st.tcp_mm[i] : st.rpy_deg[i - 3]) : null;
-    setText(`pose-${i}`, has ? fmt(pose, i < 3 ? 1 : 2) : "—");
+    const pose = has ? (i < 3 ? st.tcp_mm[i] : st.rpy_deg[i - 3]) : null;   // TCP + RPY (move targets)
+    const shown = !has ? null : i < 3 ? view.xyz_mm[i] : (rotvec ? view.rotvec_rad : view.rpy_deg)[i - 3];
+    setText(`pose-label-${i}`, i < 3 ? `${POSE_FIELDS[i][0]} (mm)`
+      : rotvec ? `R${"XYZ"[i - 3]} (rad)` : `${POSE_FIELDS[i][0]} (°)`);
+    setText(`pose-${i}`, fmt(shown, i < 3 ? 1 : rotvec ? 4 : 2));
     setText(`ft-${i}`, has ? signed((i < 3 ? st.force : st.torque)[i % 3], i < 3 ? 2 : 3) : "—");
 
     let padValue = "";
@@ -335,8 +342,8 @@ function render(st) {
 
   const ws = $("#workspace");
   if (!has) { ws.textContent = ""; ws.className = "badge"; }
-  else if (st.workspace.length) { ws.textContent = "⚠ Outside workspace: " + st.workspace.join(", "); ws.className = "badge warn"; }
-  else { ws.textContent = "✓ Inside workspace limits"; ws.className = "badge ok"; }
+  else if (st.workspace.length) { ws.textContent = "⚠ TCP outside workspace: " + st.workspace.join(", "); ws.className = "badge warn"; }
+  else { ws.textContent = "✓ TCP inside workspace limits"; ws.className = "badge ok"; }
 
   setText("gripper-cmd", st.gripper.command === "Close" ? "Closed" : st.gripper.command === "Open" ? "Open" : "—");
   setText("gripper-fb", st.gripper.feedback || "no feedback topic");

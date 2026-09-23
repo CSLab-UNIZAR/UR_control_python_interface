@@ -56,6 +56,11 @@ def pose_to_xyzrpy(T):
     return np.array([T[0, 3], T[1, 3], T[2, 3], roll, pitch, yaw])
 
 
+def rotation_vector(T):
+    """Axis-angle vector [rad] of the orientation: the RX, RY, RZ shown by the UR pendant."""
+    return Rotation.from_matrix(np.asarray(T, dtype=float)[:3, :3]).as_rotvec()
+
+
 def xyzrpy_to_pose(xyzrpy):
     """[x, y, z, roll, pitch, yaw] in metres and radians -> 4x4 pose."""
     x, y, z, roll, pitch, yaw = (float(v) for v in xyzrpy)

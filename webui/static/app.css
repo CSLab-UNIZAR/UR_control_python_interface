@@ -91,6 +91,8 @@ label output { display: inline-block; min-width: 64px; font-family: var(--mono);
 .seg button + button { border-left: 1px solid var(--border); }
 .seg button.on { background: var(--accent); color: var(--accent-text); }
 .options { display: flex; flex-wrap: wrap; gap: 10px; }
+.options.compact { margin-bottom: 10px; }
+.options.compact .seg button { padding: 3px 10px; font-size: 12px; }
 .settings { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 14px 0 6px; }
 .settings select { margin-left: 6px; }
 

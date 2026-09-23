@@ -30,8 +30,14 @@
     </div>
 
     <div class="card">
-      <h2>TCP pose <small>base frame</small>
-        <button class="link" id="copy-pose" title="Copy [x, y, z, roll, pitch, yaw] in m and rad">copy SI</button></h2>
+      <h2>Pose <small>base frame</small>
+        <button class="link" id="copy-pose" title="Copy the TCP pose [x, y, z, roll, pitch, yaw] in m and rad">copy SI</button></h2>
+      <div class="options compact">
+        <div class="seg" data-name="posePoint" title="UR_CONTROL's TCP, or the bare flange (what the pendant shows when no TCP is set)">
+          <button data-value="tcp" class="on" id="tcp-point">TCP</button><button data-value="flange">Flange</button></div>
+        <div class="seg" data-name="poseRot" title="Orientation format; the pendant shows the rotation vector by default">
+          <button data-value="rpy" class="on">RPY °</button><button data-value="rotvec">Rot. vector rad</button></div>
+      </div>
       <div class="pose-grid" id="pose-grid"></div>
       <div id="workspace" class="badge"></div>
     </div>
@@ -115,7 +121,8 @@
         <label class="grow">Max joint speed <input type="range" class="move-speed"><output></output></label>
       </div>
       <div class="preview" id="preview-pose"></div>
-      <p class="muted small">The target is reached with a single joint-space motion
+      <p class="muted small">Targets are UR_CONTROL's TCP (flange + 150 mm) with roll/pitch/yaw angles, not the
+        pendant's TCP or rotation vector. The target is reached with a single joint-space motion
         (<code>UR10Control.send_trajectory</code>), so the TCP path is not a straight line.</p>
       <div class="actions"><button class="primary needs-robot move-btn" data-kind="pose">Move to pose target</button></div>
     </div>

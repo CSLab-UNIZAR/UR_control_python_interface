@@ -23,6 +23,13 @@ STATIC_FILES = {
 }
 
 
+def _pendant_view(T):
+    """Position [mm] with RPY [deg] and rotation vector [rad], like the UR pendant."""
+    pose = kin.pose_to_xyzrpy(T)
+    return {"xyz_mm": (pose[:3] * 1000).tolist(), "rpy_deg": np.degrees(pose[3:]).tolist(),
+            "rotvec_rad": kin.rotation_vector(T).tolist()}
+
+
 class Api:
     """Maps the HTTP endpoints to RobotLink / Motion / PoseStore calls."""
 
@@ -56,6 +63,7 @@ class Api:
         }
         if s.q is not None:
             pose = kin.pose_to_xyzrpy(s.T)
+            flange = kin.fk(s.q, tcp=False)
             out.update(
                 q_deg=np.degrees(s.q).tolist(),
                 q_rad=s.q.tolist(),
@@ -63,6 +71,12 @@ class Api:
                 tcp_mm=(pose[:3] * 1000).tolist(),
                 rpy_deg=np.degrees(pose[3:]).tolist(),
                 pose_si=pose.tolist(),
+                # Same poses as the teach pendant can show them (Move tab, feature Base)
+                pendant={
+                    "tcp": _pendant_view(s.T),
+                    "flange": _pendant_view(flange),
+                    "tcp_offset_mm": float(np.linalg.norm(s.T[:3, 3] - flange[:3, 3]) * 1000),
+                },
                 workspace=kin.workspace_violations(s.T),
                 force=s.force.tolist(),
                 torque=s.torque.tolist(),
