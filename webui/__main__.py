@@ -13,9 +13,11 @@ if str(ROOT) not in sys.path:          # "core" is imported as a top-level packa
     sys.path.insert(0, str(ROOT))
 
 from webui import config                                   # noqa: E402
+from webui import kinematics as kin                        # noqa: E402
 from webui.poses import PoseStore                          # noqa: E402
 from webui.robot import EventLog, Motion, RobotLink        # noqa: E402
 from webui.server import Api, make_server                  # noqa: E402
+from webui.settings import WorkspaceStore                  # noqa: E402
 
 
 class _PrintsToLog(io.TextIOBase):
@@ -62,7 +64,16 @@ def main():
     link = RobotLink(gripper_topics=() if args.no_gripper_feedback else config.GRIPPER_FEEDBACK_TOPICS)
     link.host, link.port = args.host, args.port
     motion = Motion(link)
-    api = Api(link, motion, PoseStore(ROOT / "saved_poses.json"), events)
+    workspace_store = WorkspaceStore(ROOT / "workspace_limits.json")
+    saved_limits = workspace_store.load()
+    if saved_limits:
+        try:
+            kin.set_workspace_limits(saved_limits)
+            log.info("Workspace limits from %s: %s", workspace_store.path.name,
+                     ", ".join(f"{a} {lo * 1000:.0f} to {hi * 1000:.0f}" for a, (lo, hi) in kin.workspace_limits().items()) + " mm")
+        except ValueError as exc:
+            log.error("Ignoring %s (%s); using UR_CONTROL's workspace limits", workspace_store.path.name, exc)
+    api = Api(link, motion, PoseStore(ROOT / "saved_poses.json"), events, workspace_store)
     try:
         server = make_server(api, args.listen, args.http_port)
     except OSError as exc:

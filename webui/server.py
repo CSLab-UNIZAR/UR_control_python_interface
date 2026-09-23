@@ -33,11 +33,20 @@ def _pendant_view(T):
             "rotvec_rad": kin.rotation_vector(T).tolist()}
 
 
-class Api:
-    """Maps the HTTP endpoints to RobotLink / Motion / PoseStore calls."""
+def _limits_json(limits):
+    return {axis: list(limits[axis]) for axis in "xyz"}
 
-    def __init__(self, link, motion, poses, events):
+
+def _limits_text(limits):
+    return ", ".join(f"{axis} {lo * 1000:.0f} to {hi * 1000:.0f}" for axis, (lo, hi) in limits.items()) + " mm"
+
+
+class Api:
+    """Maps the HTTP endpoints to RobotLink / Motion / store calls."""
+
+    def __init__(self, link, motion, poses, events, workspace_store):
         self.link, self.motion, self.poses, self.events = link, motion, poses, events
+        self.workspace_store = workspace_store
 
     def config(self):
         return {
@@ -54,7 +63,8 @@ class Api:
                 "base_frame": config.ARM_BASE_FRAME,
                 "flange_frame": config.FLANGE_FRAME,
                 "tcp": config.TCP,
-                "workspace": {axis: list(limits) for axis, limits in kin.WORKSPACE_LIMITS.items()},
+                "workspace": _limits_json(kin.workspace_limits()),
+                "workspace_defaults": _limits_json(kin.DEFAULT_WORKSPACE),
             },
         }
 
@@ -70,6 +80,7 @@ class Api:
             "jog": {"text": self.motion.status[0], "level": self.motion.status[1],
                     "axes": self.motion.active_axes()},
             "log": self.events.since(since),
+            "limits": _limits_json(kin.workspace_limits()),   # workspace box [m], UR base frame
         }
         if s.q is not None:
             pose = kin.pose_to_xyzrpy(s.T)
@@ -128,6 +139,14 @@ class Api:
         elif path == "/api/poses/delete":
             self.poses.delete(body.get("name", ""))
             log.info("Deleted pose %r", body.get("name"))
+        elif path == "/api/workspace":   # limits in mm, UR base frame
+            kin.set_workspace_limits({axis: [float(v) / 1000.0 for v in body.get(axis, [])] for axis in "xyz"})
+            self.workspace_store.save(kin.workspace_limits())
+            log.warning("Workspace limits set to %s (UR base frame, web panel only)", _limits_text(kin.workspace_limits()))
+        elif path == "/api/workspace/reset":
+            kin.set_workspace_limits(kin.DEFAULT_WORKSPACE)
+            self.workspace_store.clear()
+            log.info("Workspace limits reset to UR_CONTROL's defaults: %s", _limits_text(kin.workspace_limits()))
         else:
             return None
         return {"ok": True}

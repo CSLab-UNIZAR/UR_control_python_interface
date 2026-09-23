@@ -57,9 +57,14 @@ export class RobotViewer {
     const fill = new THREE.DirectionalLight(0xffffff, 0.6);
     fill.position.set(-3, 2, 2);
     this.scene.add(key, fill);
-    this.grid = new THREE.GridHelper(8, 32);
-    this.grid.rotation.x = Math.PI / 2;   // three's grid lies in XZ; ROS is Z-up
-    this.scene.add(this.grid);
+    // World frame = UR base. Grid on its XY plane: 0.1 m cells, 0.5 m major lines.
+    this.gridMinor = new THREE.GridHelper(4, 40);
+    this.gridMajor = new THREE.GridHelper(4, 8);
+    for (const grid of [this.gridMinor, this.gridMajor]) {
+      grid.rotation.x = Math.PI / 2;   // three's grid lies in XZ; ROS is Z-up
+      this.scene.add(grid);
+    }
+    this.scene.add(this.makeTicks());
 
     new ResizeObserver(() => this.resize()).observe(container);
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => this.applyTheme());
@@ -81,11 +86,31 @@ export class RobotViewer {
 
   applyTheme() {
     this.scene.background = new THREE.Color(cssColor("--viewer-bg"));
-    const grid = new THREE.Color(cssColor("--viewer-grid"));
-    this.grid.material.color = grid;
-    this.grid.material.vertexColors = false;
-    this.grid.material.needsUpdate = true;
+    for (const [grid, color, opacity] of [[this.gridMinor, "--viewer-grid", 0.5], [this.gridMajor, "--viewer-grid-major", 1]]) {
+      grid.material.color = new THREE.Color(cssColor(color));
+      grid.material.vertexColors = false;
+      grid.material.transparent = opacity < 1;
+      grid.material.opacity = opacity;
+      grid.material.needsUpdate = true;
+    }
     this.requestRender();
+  }
+
+  makeTicks() {   // coordinate labels [m] along the X and Y axes of the UR base
+    const ticks = new THREE.Group();
+    for (let v = -2; v <= 2; v += 0.5) {
+      if (v === 0) continue;
+      for (const axis of ["x", "y"]) {
+        const div = document.createElement("div");
+        div.className = "grid-tick";
+        div.textContent = `${axis} ${v > 0 ? "+" : "−"}${Math.abs(v).toFixed(1)}`;
+        const tag = new CSS2DObject(div);
+        tag.position.set(axis === "x" ? v : 0, axis === "y" ? v : 0, 0);
+        tag.userData.frameLabel = true;
+        ticks.add(tag);
+      }
+    }
+    return ticks;
   }
 
   resize() {
@@ -105,13 +130,20 @@ export class RobotViewer {
     ]);
     this.model = model;
     this.buildTree(model);
+    this.placeWorldAtBase();
     this.addVisuals(model, gltf.scene);
     this.addFrames();
     this.addWorkspace();
     this.arrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 0.22,
       new THREE.Color(cssColor("--accent")), 0.06, 0.035);
     this.arrow.visible = false;
-    this.scene.add(this.arrow);
+    const muted = new THREE.Color(cssColor("--muted"));
+    this.drop = new THREE.Line(new THREE.BufferGeometry(),
+      new THREE.LineDashedMaterial({ color: muted, dashSize: 0.02, gapSize: 0.014 }));
+    this.dropFoot = new THREE.Mesh(new THREE.RingGeometry(0.012, 0.02, 24),
+      new THREE.MeshBasicMaterial({ color: muted, side: THREE.DoubleSide }));
+    this.drop.visible = this.dropFoot.visible = false;
+    this.scene.add(this.arrow, this.drop, this.dropFoot);
     this.ghost = this.makeGhost();
     const mimicked = new Set(model.joints.filter((j) => j.mimic).map((j) => j.mimic.joint));
     this.gripperJoint = model.joints.find((j) => mimicked.has(j.name));
@@ -137,6 +169,14 @@ export class RobotViewer {
     }
     this.root = this.links[model.root];
     this.scene.add(this.root);
+  }
+
+  // Move the whole robot so that the UR base is the world origin (all links hang from it)
+  placeWorldAtBase() {
+    this.scene.updateMatrixWorld(true);
+    this.links[this.cfg.base_frame].matrixWorld.clone().invert()
+      .decompose(this.root.position, this.root.quaternion, this.root.scale);
+    this.scene.updateMatrixWorld(true);
   }
 
   addVisuals(model, meshScene) {
@@ -197,6 +237,7 @@ export class RobotViewer {
       tag.position.set(0, 0, size * 0.25);
       tag.userData.frameLabel = true;
       group.add(tag);
+      group.userData.label = div;
     }
     return group;
   }
@@ -204,7 +245,7 @@ export class RobotViewer {
   addFrames() {
     const cfg = this.cfg;
     this.fixedFrames = [
-      [this.links[cfg.base_frame], this.makeAxes(0.25, "UR base (pendant Base)")],
+      [this.links[cfg.base_frame], this.makeAxes(0.25, "World = UR base (pendant Base)")],
       [this.links[cfg.flange_frame], this.makeAxes(0.09, "flange")],
     ];
     const campero = this.links["campero_base_link"];
@@ -217,7 +258,8 @@ export class RobotViewer {
     this.tcp.position.set(x, y, z);
     const rot = new THREE.Vector3(rx, ry, rz);
     if (rot.length() > 0) this.tcp.quaternion.setFromAxisAngle(rot.clone().normalize(), rot.length());
-    this.tcp.add(this.makeAxes(0.12, "TCP"));
+    this.tcpAxes = this.makeAxes(0.12, "TCP");
+    this.tcp.add(this.tcpAxes);
     this.links[cfg.flange_frame].add(this.tcp);
 
     this.jointFrames = cfg.arm_joints.map((name, i) => {
@@ -233,18 +275,29 @@ export class RobotViewer {
   }
 
   addWorkspace() {
-    const w = this.cfg.workspace;
-    const size = ["x", "y", "z"].map((a) => w[a][1] - w[a][0]);
-    const center = ["x", "y", "z"].map((a) => (w[a][0] + w[a][1]) / 2);
-    const box = new THREE.BoxGeometry(...size);
     this.workspaceFill = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.06, depthWrite: false });
     this.workspaceEdge = new THREE.LineBasicMaterial();
     this.workspace = new THREE.Group();
-    this.workspace.add(new THREE.Mesh(box, this.workspaceFill), new THREE.LineSegments(new THREE.EdgesGeometry(box), this.workspaceEdge));
-    this.workspace.position.set(...center);
     this.workspace.userData.ghostHide = true;
     this.links[this.cfg.base_frame].add(this.workspace);
+    this.setWorkspaceLimits(this.cfg.workspace);
     this.setWorkspaceState(true);
+  }
+
+  // limits: {x: [min, max], y: [...], z: [...]} in metres, UR base frame
+  setWorkspaceLimits(limits) {
+    const key = JSON.stringify(limits);
+    if (!this.workspace || key === this.workspaceKey) return;
+    this.workspaceKey = key;
+    for (const child of [...this.workspace.children]) {
+      child.geometry.dispose();
+      this.workspace.remove(child);
+    }
+    const box = new THREE.BoxGeometry(...["x", "y", "z"].map((a) => limits[a][1] - limits[a][0]));
+    this.workspace.add(new THREE.Mesh(box, this.workspaceFill),
+      new THREE.LineSegments(new THREE.EdgesGeometry(box), this.workspaceEdge));
+    this.workspace.position.set(...["x", "y", "z"].map((a) => (limits[a][0] + limits[a][1]) / 2));
+    this.requestRender();
   }
 
   setWorkspaceState(inside) {
@@ -289,16 +342,32 @@ export class RobotViewer {
     return values;
   }
 
-  // q: J1..J6 [rad]; gripperClosed: 0..1 or null; jog: {axes, space, frame}; inside: TCP within the box
-  update({ q, gripperClosed, jog, inside }) {
+  // q: J1..J6 [rad]; gripperClosed: 0..1 or null; jog: {axes, space, frame}; inside: TCP within the box;
+  // tcpMm: TCP position in the UR base frame as shown in the Pose card
+  update({ q, gripperClosed, jog, inside, tcpMm }) {
     if (!this.root || !q) return;
     const key = JSON.stringify([q.map((v) => v.toFixed(4)), gripperClosed, jog, inside]);
     if (key === this.lastKey) return;
     this.lastKey = key;
     this.setJoints(this.root, this.jointValues(q, gripperClosed));
     this.setWorkspaceState(inside);
+    this.scene.updateMatrixWorld(true);
+    this.updateTcpMarker(tcpMm);
     this.updateArrow(jog);
     this.requestRender();
+  }
+
+  // TCP coordinates in the world frame (= UR base) and a drop line to its XY plane
+  updateTcpMarker(tcpMm) {
+    const p = this.tcp.getWorldPosition(new THREE.Vector3());
+    const mm = tcpMm || [p.x * 1000, p.y * 1000, p.z * 1000];
+    this.tcpAxes.userData.label.textContent =
+      `TCP  x ${mm[0].toFixed(0)}  y ${mm[1].toFixed(0)}  z ${mm[2].toFixed(0)} mm`;
+    this.drop.geometry.dispose();
+    this.drop.geometry = new THREE.BufferGeometry().setFromPoints([p, new THREE.Vector3(p.x, p.y, 0)]);
+    this.drop.computeLineDistances();
+    this.dropFoot.position.set(p.x, p.y, 0.001);
+    this.drop.visible = this.dropFoot.visible = true;
   }
 
   updateArrow(jog) {

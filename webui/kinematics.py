@@ -184,12 +184,44 @@ def rotation_angle(T_a, T_b):
     return float(np.linalg.norm(Rotation.from_matrix(R_rel).as_rotvec()))
 
 
+# --- workspace box (TCP limits in the UR base frame, metres) ----------------------------
+# The panel starts from UR_CONTROL's WORKSPACE_LIMITS and lets the user change its own
+# copy; the constants in core/ur10_core.py (used by the other controllers) stay as they are.
+DEFAULT_WORKSPACE = {axis: (float(WORKSPACE_LIMITS[axis][0]), float(WORKSPACE_LIMITS[axis][1])) for axis in "xyz"}
+MAX_WORKSPACE_EXTENT = 2.0   # m from the UR base: well beyond the reach of the UR10 + gripper
+_workspace = dict(DEFAULT_WORKSPACE)
+
+
+def workspace_limits():
+    """Current limits {axis: (min, max)} in metres, UR base frame."""
+    return dict(_workspace)
+
+
+def set_workspace_limits(limits):
+    """Validate and apply {axis: (min, max)} in metres. Raises ValueError."""
+    global _workspace
+    new = {}
+    for axis in "xyz":
+        try:
+            lo, hi = (float(v) for v in limits[axis])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError(f"{axis}: a minimum and a maximum are required") from None
+        if not (np.isfinite(lo) and np.isfinite(hi)):
+            raise ValueError(f"{axis}: limits must be numbers")
+        if hi - lo < 0.01:
+            raise ValueError(f"{axis}: the maximum must be at least 10 mm above the minimum")
+        if max(abs(lo), abs(hi)) > MAX_WORKSPACE_EXTENT:
+            raise ValueError(f"{axis}: limits must stay within ±{MAX_WORKSPACE_EXTENT * 1000:.0f} mm of the UR base")
+        new[axis] = (lo, hi)
+    _workspace = new   # single assignment: the jog thread always sees a complete box
+
+
 def workspace_violations(T):
     """Which workspace limits the TCP of pose T violates, e.g. 'x = -1312 mm (limits -1300 to -300)'."""
-    p = np.asarray(T, dtype=float)[:3, 3]
+    p, limits = np.asarray(T, dtype=float)[:3, 3], _workspace
     out = []
     for i, axis in enumerate("xyz"):
-        lo, hi = WORKSPACE_LIMITS[axis]
+        lo, hi = limits[axis]
         if not lo <= p[i] <= hi:
             out.append(f"{axis} = {p[i] * 1000:.0f} mm (limits {lo * 1000:.0f} to {hi * 1000:.0f})")
     return out
@@ -197,9 +229,9 @@ def workspace_violations(T):
 
 def workspace_distance(T):
     """Distance [m] from the TCP of pose T to the workspace box (0 inside)."""
-    p = np.asarray(T, dtype=float)[:3, 3]
-    lo = np.array([WORKSPACE_LIMITS[axis][0] for axis in "xyz"])
-    hi = np.array([WORKSPACE_LIMITS[axis][1] for axis in "xyz"])
+    p, limits = np.asarray(T, dtype=float)[:3, 3], _workspace
+    lo = np.array([limits[axis][0] for axis in "xyz"])
+    hi = np.array([limits[axis][1] for axis in "xyz"])
     return float(np.linalg.norm(p - np.clip(p, lo, hi)))
 
 

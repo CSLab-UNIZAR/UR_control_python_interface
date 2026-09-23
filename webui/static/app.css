@@ -3,7 +3,7 @@
   --accent: #2563eb; --accent-text: #ffffff; --input: #ffffff; --hover: #f0f3f8;
   --ok: #15803d; --warn: #b45309; --danger: #dc2626;
   --x: #dc2626; --y: #16a34a; --z: #2563eb; --grid: #e5e7eb;
-  --viewer-bg: #eef1f5; --viewer-grid: #c9ced6;
+  --viewer-bg: #eef1f5; --viewer-grid: #c9ced6; --viewer-grid-major: #9aa3b0;
   --mono: "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, monospace;
   color-scheme: light;
 }
@@ -13,7 +13,7 @@
     --accent: #4f8cff; --accent-text: #ffffff; --input: #171a20; --hover: #262a33;
     --ok: #3fb950; --warn: #e3a008; --danger: #f85149;
     --x: #ff6b6b; --y: #4cc38a; --z: #6e9bff; --grid: #2a2e36;
-    --viewer-bg: #111318; --viewer-grid: #2c313a;
+    --viewer-bg: #111318; --viewer-grid: #2c313a; --viewer-grid-major: #4a5260;
     color-scheme: dark;
   }
 }
@@ -161,7 +161,7 @@ td { padding: 3px 6px; }
 /* --- 3D view ------------------------------------------------------------------------------------ */
 .viewer-card { position: sticky; top: 70px; }
 .viewer-card h2 .views { margin-left: auto; display: flex; gap: 10px; }
-.viewer { position: relative; height: calc(100vh - 215px); min-height: 380px; margin: 10px 0 8px;
+.viewer { position: relative; height: calc(100vh - 250px); min-height: 380px; margin: 10px 0 8px;
           border-radius: 8px; overflow: hidden; background: var(--viewer-bg); }
 .viewer canvas { display: block; }
 .viewer-labels { position: absolute; top: 0; left: 0; pointer-events: none; }
@@ -173,6 +173,15 @@ td { padding: 3px 6px; }
                border-radius: 4px; background: color-mix(in srgb, var(--card) 80%, transparent);
                border: 1px solid var(--border); white-space: nowrap; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.grid-tick { font: 10px var(--mono); color: var(--muted); }
+.ws-editor { margin-bottom: 8px; }
+.viewer-card:has(.ws-editor[open]) .viewer { height: calc(100vh - 450px); }   /* keep the editor in view */
+.ws-editor summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.ws-editor summary small { font-weight: 400; }
+.ws-grid { display: grid; grid-template-columns: 24px 1fr 1fr; gap: 6px 10px; align-items: center;
+           max-width: 340px; margin-top: 8px; }
+.ws-grid input { width: 100%; text-align: right; font-family: var(--mono); }
+.ws-grid span:not(.muted) { font-weight: 700; }
 .chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border: 1px solid var(--border);
         border-radius: 999px; font-size: 12px; cursor: pointer; user-select: none; }
 .chip input { margin: 0; accent-color: var(--accent); }

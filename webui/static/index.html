@@ -33,7 +33,7 @@
     </div>
 
     <div class="card">
-      <h2>Pose <small>base frame</small>
+      <h2>Pose <small>w.r.t. UR base (pendant Base)</small>
         <button class="link" id="copy-pose" title="Copy the TCP pose [x, y, z, roll, pitch, yaw] in m and rad">copy SI</button></h2>
       <div class="options compact">
         <div class="seg" data-name="posePoint" title="UR_CONTROL's TCP, or the bare flange (what the pendant shows when no TCP is set)">
@@ -155,9 +155,24 @@
       </div>
       <div id="viewer" class="viewer"><div class="viewer-msg muted">Loading 3D model…</div>
         <div class="viewer-overlay" id="viewer-overlay" hidden>No robot data: the arm is shown with all joints at 0°</div></div>
-      <div class="muted small">Drag to rotate, right-drag to pan, wheel to zoom. Axes: X red, Y green,
-        Z blue. The box is the UR_CONTROL workspace (orange when the TCP is outside); the translucent
-        arm is the target of the previewed move.</div>
+      <details class="ws-editor" id="ws-editor">
+        <summary>Workspace limits <small class="muted">TCP box in the UR base frame, mm</small></summary>
+        <div class="ws-grid">
+          <span></span><span class="muted small">min</span><span class="muted small">max</span>
+          <span class="axis-x">x</span><input type="number" step="10" data-axis="x" data-end="0"><input type="number" step="10" data-axis="x" data-end="1">
+          <span class="axis-y">y</span><input type="number" step="10" data-axis="y" data-end="0"><input type="number" step="10" data-axis="y" data-end="1">
+          <span class="axis-z">z</span><input type="number" step="10" data-axis="z" data-end="0"><input type="number" step="10" data-axis="z" data-end="1">
+        </div>
+        <div class="row">
+          <button id="ws-apply" class="primary" disabled>Apply</button>
+          <button id="ws-reset" title="WORKSPACE_LIMITS in core/ur10_core.py">Reset to UR_CONTROL defaults</button>
+          <span id="ws-note" class="muted small"></span>
+        </div>
+      </details>
+      <div class="muted small">World frame = UR base (pendant Base): the grid is its XY plane (0.1 m cells,
+        labels in m) and the TCP label gives the TCP coordinates in it. Drag to rotate, right-drag to pan,
+        wheel to zoom. Axes: X red, Y green, Z blue. The box is the workspace (orange when the TCP is
+        outside); the translucent arm is the target of the previewed move.</div>
     </div>
   </section>
 </main>

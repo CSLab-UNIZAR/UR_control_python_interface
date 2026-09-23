@@ -232,8 +232,8 @@ One robot connection per run: to change robot, restart the panel.
 ### Robot state (left column)
 
 - **Joints**: J1–J6 in degrees and radians, plus velocity (°/s).
-- **Pose**: position [mm] of the TCP (or of the bare flange) in the UR base frame,
-  computed with the arm's calibration. Orientation is shown as roll/pitch/yaw [°] or
+- **Pose**: position [mm] of the TCP (or of the bare flange) **relative to the UR
+  base** (`campero_ur10_base`, the pendant's Base), computed with the arm's calibration. Orientation is shown as roll/pitch/yaw [°] or
   as a rotation vector [rad]. The card also shows whether the TCP lies inside the
   workspace limits (see [Comparing with the teach pendant](#comparing-with-the-teach-pendant)).
 - **Gripper**: last command sent, and feedback (finger gap, object detected, faults)
@@ -272,9 +272,20 @@ which is 3–6 mm off.
 UR_CONTROL keeps the **TCP** inside a box in the UR base frame
 (`WORKSPACE_LIMITS` in `core/ur10_core.py`): x from −1300 to −300 mm, y from −450 to
 800 mm and z from 200 to 800 mm. That is from 0.3 m to 1.3 m behind the arm base
-(towards the rear of the Campero) and 0.2–0.8 m above it. The panel accepts a
-Cartesian target only if it is **inside the box, or strictly closer to the box than
-the current pose**. So:
+(towards the rear of the Campero) and 0.2–0.8 m above it.
+
+**Setting the limits.** Open *Workspace limits* under the 3D view, type the minimum
+and maximum of x, y and z in mm (UR base frame) and press **Apply**. The box in the
+3D view and all panel checks use the new limits at once. They are saved in
+`workspace_limits.json` at the repository root and reloaded at start-up (commit the
+file to share the cell's limits). **Reset to UR_CONTROL defaults** restores the
+values from `core/ur10_core.py` and deletes the file. Each axis needs a span of at
+least 10 mm and limits within ±2000 mm of the UR base. These limits apply to the
+web panel only; the other controllers keep `WORKSPACE_LIMITS` from
+`core/ur10_core.py`.
+
+The panel accepts a Cartesian target only if it is **inside the box, or strictly
+closer to the box than the current pose**. So:
 
 - The limits apply to the TCP, 150 mm beyond the flange, not to the flange the
   pendant usually shows. With the gripper horizontal, the TCP can reach a limit
@@ -306,11 +317,17 @@ sensors and laser supports, and the UR10 with the FT sensor and the gripper. All
 it comes from the URDF used on the robot, with the arm calibration, and follows
 `/joint_states` (the gripper follows its feedback, or the last command).
 
+The **world frame is the UR base** (the pendant's Base). The grid is its XY plane
+(0.1 m cells, 0.5 m major lines, labels in metres along X and Y), and the Campero
+sits below it. The TCP carries a label with its coordinates in this frame, the same
+values as the Pose card, and a dashed line drops from it to the XY plane.
+
 - Frames: **UR base (pendant Base)**, **Campero base_link**, **flange** and **TCP**,
   plus optional **Joint frames** (J1–J6) and **Link frames** (every URDF link).
   Axes: X red, Y green, Z blue.
-- **Workspace**: the box above; **Campero**: hide the mobile base for a clear view
-  of the arm; **Labels**: frame names.
+- **Workspace**: the box of the [workspace limits](#workspace-limits), editable
+  below the view; **Campero**: hide the mobile base for a clear view of the arm;
+  **Labels**: frame names and grid coordinates.
 - While jogging in Cartesian space, an arrow at the TCP shows the direction (blue:
   translation, orange: rotation axis).
 - On the *Move to* tabs, a translucent arm shows the previewed target.
@@ -528,6 +545,9 @@ Panel settings live in `webui/config.py`. The most relevant ones:
 | `ARM_BASE_FRAME`, `FLANGE_FRAME`, `ARM_JOINTS` | `campero_ur10_base`, `campero_ur10_tool0`, `campero_ur10_*` | how the arm is found in the robot model |
 | `GRIPPER_FEEDBACK_TOPICS` | `/robotiq_2f_gripper/input`, `/Robotiq2FGripperRobotInput` | gripper status topics watched; `()` disables them |
 | `PRESET_POSES_DEG` | force-control start | built-in joint presets |
+
+The workspace limits are set from the panel (see [Workspace limits](#workspace-limits))
+and stored in `workspace_limits.json`; saved joint poses go to `saved_poses.json`.
 
 ---
 

@@ -16,6 +16,7 @@ const S = {
   ft: [],                     // [time, fx, fy, fz, mx, my, mz]
   touched: { joints: false, pose: false },
   planTimers: {}, lastPlan: 0, poses: [],
+  wsDirty: false,             // workspace limits edited but not applied yet
 };
 
 // ------------------------------------------------------------------ helpers
@@ -120,7 +121,22 @@ function buildPage() {
   fillSelect($("#joint-step"), S.cfg.steps.joint_deg, "°");
   $("#robot-host").value = S.cfg.robot.host;
   $("#robot-port").value = S.cfg.robot.port;
+  fillWorkspace(S.cfg.viewer.workspace);
   updateJogMode();
+}
+
+// Workspace editor: limits in metres from the server, shown in mm
+function fillWorkspace(limits) {
+  for (const input of $$(".ws-grid input")) {
+    const value = String(Math.round(limits[input.dataset.axis][+input.dataset.end] * 1000));
+    if (input.value !== value && document.activeElement !== input) input.value = value;
+  }
+}
+
+function workspaceInputs() {
+  const limits = { x: [0, 0], y: [0, 0], z: [0, 0] };
+  for (const input of $$(".ws-grid input")) limits[input.dataset.axis][+input.dataset.end] = +input.value;
+  return limits;
 }
 
 function initRange(el, [def, min, max], unit) {
@@ -366,10 +382,12 @@ function render(st) {
   }
   if (S.tab !== "jog" && performance.now() - S.lastPlan > 1000) schedulePlan(S.tab);
   $("#viewer-overlay").hidden = has || !S.viewer;
+  if (!S.wsDirty) fillWorkspace(st.limits);
+  S.viewer?.setWorkspaceLimits(st.limits);
   if (S.viewer && has) {
     S.viewer.update({
       q: st.q_rad, gripperClosed: st.gripper.closed, inside: st.workspace.length === 0,
-      jog: { axes: st.jog.axes, space: S.space, frame: S.frame },
+      jog: { axes: st.jog.axes, space: S.space, frame: S.frame }, tcpMm: st.tcp_mm,
     });
   }
 }
@@ -498,6 +516,30 @@ function bindEvents() {
       fillTargets(kind, kind === "joints" ? st.q_deg : [...st.tcp_mm, ...st.rpy_deg]);
     });
   }
+
+  for (const input of $$(".ws-grid input")) {
+    input.addEventListener("input", () => {
+      S.wsDirty = true;
+      $("#ws-apply").disabled = false;
+      setText("ws-note", "not applied yet");
+    });
+  }
+  $("#ws-apply").addEventListener("click", async () => {
+    const r = await command("/api/workspace", workspaceInputs());
+    if (!r.ok) return;
+    S.wsDirty = false;
+    $("#ws-apply").disabled = true;
+    setText("ws-note", "applied");
+  });
+  $("#ws-reset").addEventListener("click", async () => {
+    releaseAll();
+    if (!window.confirm("Reset the workspace limits to UR_CONTROL's defaults?")) return;
+    const r = await command("/api/workspace/reset", {});
+    if (!r.ok) return;
+    S.wsDirty = false;
+    $("#ws-apply").disabled = true;
+    setText("ws-note", "defaults restored");
+  });
 
   $("#pose-select").addEventListener("change", updatePoseButtons);
   $("#pose-load").addEventListener("click", () => {
