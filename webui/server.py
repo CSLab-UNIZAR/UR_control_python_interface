@@ -15,12 +15,15 @@ from webui.robot import PHASE_TEXT, MotionError, NotReady
 
 log = logging.getLogger("webui")
 
-STATIC_DIR = Path(__file__).with_name("static")
-STATIC_FILES = {
-    "/": ("index.html", "text/html; charset=utf-8"),
-    "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-    "/app.css": ("app.css", "text/css; charset=utf-8"),
+STATIC_DIR = Path(__file__).with_name("static").resolve()
+CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json",
+    ".glb": "model/gltf-binary",
 }
+CACHED_DIRS = ("vendor", "robot")   # large files that only change with a new version
 
 
 def _pendant_view(T):
@@ -46,6 +49,13 @@ class Api:
             "keepalive_ms": int(config.WATCHDOG_S * 1000 / 4),
             "confirm_above_deg": config.CONFIRM_ABOVE_DEG,
             "joint_names": kin.JOINT_NAMES,
+            "viewer": {   # used by the 3D view
+                "arm_joints": config.ARM_JOINTS,
+                "base_frame": config.ARM_BASE_FRAME,
+                "flange_frame": config.FLANGE_FRAME,
+                "tcp": config.TCP,
+                "workspace": {axis: list(limits) for axis, limits in kin.WORKSPACE_LIMITS.items()},
+            },
         }
 
     def state(self, since):
@@ -56,7 +66,7 @@ class Api:
             "error": self.link.error,
             "robot": {"host": self.link.host, "port": self.link.port},
             "rates": s.rates,
-            "gripper": {"command": self.link.gripper_command, "feedback": self.link.gripper_feedback()},
+            "gripper": self._gripper(),
             "jog": {"text": self.motion.status[0], "level": self.motion.status[1],
                     "axes": self.motion.active_axes()},
             "log": self.events.since(since),
@@ -82,6 +92,14 @@ class Api:
                 torque=s.torque.tolist(),
             )
         return out
+
+    def _gripper(self):
+        command = self.link.gripper_command
+        feedback = self.link.gripper_feedback()
+        if feedback is not None:
+            return {"command": command, "feedback": feedback[0], "closed": feedback[1]}
+        closed = {"Open": 0.0, "Close": 1.0}.get(command)   # no feedback: assume the last command
+        return {"command": command, "feedback": None, "closed": closed}
 
     def post(self, path, body):
         m = self.motion
@@ -152,11 +170,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(self.api.config())
         elif url.path == "/api/poses":
             self._send_json({"ok": True, "poses": self.api.poses.all()})
-        elif url.path in STATIC_FILES:
-            name, content_type = STATIC_FILES[url.path]
-            self._send(HTTPStatus.OK, (STATIC_DIR / name).read_bytes(), content_type)
         else:
-            self._send_json({"ok": False, "error": "not found"}, HTTPStatus.NOT_FOUND)
+            self._send_static(url.path)
+
+    def _send_static(self, url_path):
+        path = (STATIC_DIR / (url_path.lstrip("/") or "index.html")).resolve()
+        if STATIC_DIR not in path.parents or not path.is_file() or path.suffix not in CONTENT_TYPES:
+            return self._send_json({"ok": False, "error": "not found"}, HTTPStatus.NOT_FOUND)
+        cache = "max-age=3600" if path.relative_to(STATIC_DIR).parts[0] in CACHED_DIRS else "no-store"
+        self._send(HTTPStatus.OK, path.read_bytes(), CONTENT_TYPES[path.suffix], cache)
 
     def do_POST(self):
         # Only the panel itself may send commands: JSON bodies force a CORS preflight
@@ -184,11 +206,11 @@ class Handler(BaseHTTPRequestHandler):
     def _send_json(self, obj, status=HTTPStatus.OK):
         self._send(status, json.dumps(obj).encode("utf-8"), "application/json")
 
-    def _send(self, status, data, content_type):
+    def _send(self, status, data, content_type, cache="no-store"):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         self.end_headers()
         self.wfile.write(data)
 

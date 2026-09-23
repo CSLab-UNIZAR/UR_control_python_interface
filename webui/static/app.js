@@ -239,8 +239,10 @@ async function plan(kind) {
   if (!r.ok) {
     box.className = "preview error";
     box.textContent = "✗ " + r.error;
+    S.viewer?.setGhost(null);
     return null;
   }
+  if (S.tab === kind) S.viewer?.setGhost(r.max_motion_deg < 0.01 ? null : r.q_deg.map((v) => v * Math.PI / 180));
   let html = r.max_motion_deg < 0.01 ? "Already at the target."
     : `Largest joint motion: <b>${r.worst_joint} ${fmt(r.max_motion_deg)}°</b> · duration ≈ <b>${fmt(r.duration)} s</b>`;
   html += kind === "pose"
@@ -363,6 +365,13 @@ function render(st) {
     S.logSince = st.log[st.log.length - 1].id;
   }
   if (S.tab !== "jog" && performance.now() - S.lastPlan > 1000) schedulePlan(S.tab);
+  $("#viewer-overlay").hidden = has || !S.viewer;
+  if (S.viewer && has) {
+    S.viewer.update({
+      q: st.q_rad, gripperClosed: st.gripper.closed, inside: st.workspace.length === 0,
+      jog: { axes: st.jog.axes, space: S.space, frame: S.frame },
+    });
+  }
 }
 
 function renderServerDown() {
@@ -471,6 +480,7 @@ function bindEvents() {
       $$(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
       for (const name of ["jog", "joints", "pose"]) $(`#tab-${name}`).hidden = name !== S.tab;
       if (S.tab !== "jog") schedulePlan(S.tab);
+      else S.viewer?.setGhost(null);
     });
   }
 
@@ -555,10 +565,29 @@ function gripper(cmd) {
 }
 
 // ------------------------------------------------------------------ start
+async function startViewer() {
+  const box = $("#viewer");
+  try {
+    const { RobotViewer } = await import("./viewer.js");
+    const viewer = new RobotViewer(box, S.cfg.viewer);
+    await viewer.load();
+    box.querySelector(".viewer-msg")?.remove();
+    for (const input of $$(".chips input")) {
+      input.addEventListener("change", () => viewer.setOptions({ [input.dataset.opt]: input.checked }));
+    }
+    for (const b of $$(".views button")) b.addEventListener("click", () => viewer.setView(b.dataset.view));
+    S.viewer = viewer;
+  } catch (err) {
+    console.error(err);
+    box.querySelector(".viewer-msg").textContent = "3D view unavailable: " + err.message;
+  }
+}
+
 (async () => {
   S.cfg = await api("/api/config");
   buildPage();
   bindEvents();
   await refreshPoses();
   poll();
+  startViewer();
 })();

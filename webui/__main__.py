@@ -50,7 +50,7 @@ def main():
     parser.add_argument("--no-connect", action="store_true", help="do not connect to the robot at start-up")
     parser.add_argument("--no-browser", action="store_true", help="do not open the browser")
     parser.add_argument("--no-gripper-feedback", action="store_true",
-                        help=f"do not subscribe to {config.GRIPPER_FEEDBACK_TOPIC}")
+                        help="do not subscribe to the gripper feedback topics")
     args = parser.parse_args()
 
     events = EventLog()
@@ -59,7 +59,7 @@ def main():
     logging.getLogger("twisted").setLevel(logging.WARNING)
     log = logging.getLogger("webui")
 
-    link = RobotLink(gripper_topic=None if args.no_gripper_feedback else config.GRIPPER_FEEDBACK_TOPIC)
+    link = RobotLink(gripper_topics=() if args.no_gripper_feedback else config.GRIPPER_FEEDBACK_TOPICS)
     link.host, link.port = args.host, args.port
     motion = Motion(link)
     api = Api(link, motion, PoseStore(ROOT / "saved_poses.json"), events)

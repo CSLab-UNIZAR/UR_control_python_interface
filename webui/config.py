@@ -43,9 +43,21 @@ JOINT_STEPS_DEG = ((0.5, 1, 5, 10), 5)
 # --- Moves ----------------------------------------------------------------------------------
 CONFIRM_ABOVE_DEG = 45   # "Move to" asks for confirmation above this joint displacement
 
+# --- Arm model (webui/static/robot/model.json, built by tools/build_robot_model.py) ----------
+ARM_BASE_FRAME = "campero_ur10_base"    # UR controller "Base" = pendant Base = UR_CONTROL base frame
+FLANGE_FRAME = "campero_ur10_tool0"     # tool flange (pendant pose with an all-zero TCP)
+ARM_JOINTS = tuple(f"campero_ur10_{name}_joint" for name in
+                   ("shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3"))
+
+# TCP relative to the flange, written like the pendant's Installation > TCP:
+# (x, y, z [m], rx, ry, rz [rad, rotation vector]). The default is UR_CONTROL's TCP
+# (tcp_offset in core/ur10_core.py). Set the same values on the pendant to compare readings.
+TCP = (0.0, 0.0, 0.15, 0.0, 0.0, 0.0)
+
 # --- Gripper feedback (read-only, optional) --------------------------------------------------
-# Published by Robotiq2FGripperRtuNode.py on the Campero. Set to None to disable.
-GRIPPER_FEEDBACK_TOPIC = "/Robotiq2FGripperRobotInput"
+# Robotiq2FGripperRtuNode.py publishes Robotiq2FGripperRobotInput; campero_ur10_bringup.launch
+# remaps it to /robotiq_2f_gripper/input. Both names are watched; use () to disable.
+GRIPPER_FEEDBACK_TOPICS = ("/robotiq_2f_gripper/input", "/Robotiq2FGripperRobotInput")
 GRIPPER_FEEDBACK_TYPE = "robotiq_2f_gripper_control/Robotiq2FGripper_robot_input"
 
 # --- Joint presets (degrees, J1..J6) offered in "Move to joints" ----------------------------

@@ -11,7 +11,8 @@ leapc-python-bindings/
 # Local files kept next to the repository (the report contains lab credentials)
 memoria_practicas.pdf
 UR_CONTROL.zip
-prompt.md
+prompt*.md
+catkin_campero_adrian/
 
 # Editors / OS
 .vscode/

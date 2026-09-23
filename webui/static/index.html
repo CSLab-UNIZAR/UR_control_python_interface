@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>UR10 Control Panel</title>
   <link rel="stylesheet" href="app.css">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+  </script>
 </head>
 <body>
 <header class="topbar">
@@ -121,9 +124,9 @@
         <label class="grow">Max joint speed <input type="range" class="move-speed"><output></output></label>
       </div>
       <div class="preview" id="preview-pose"></div>
-      <p class="muted small">Targets are UR_CONTROL's TCP (flange + 150 mm) with roll/pitch/yaw angles, not the
-        pendant's TCP or rotation vector. The target is reached with a single joint-space motion
-        (<code>UR10Control.send_trajectory</code>), so the TCP path is not a straight line.</p>
+      <p class="muted small">Targets are the TCP (flange + 150 mm, as in UR_CONTROL) in the UR base frame, with
+        roll/pitch/yaw angles, not the pendant's rotation vector. The joint solution is sent as one
+        <code>UR10Control.send_trajectory</code> command, so the TCP path is not a straight line.</p>
       <div class="actions"><button class="primary needs-robot move-btn" data-kind="pose">Move to pose target</button></div>
     </div>
     </div>
@@ -131,6 +134,30 @@
     <div class="card log">
       <h2>Log</h2>
       <div id="log"></div>
+    </div>
+  </section>
+
+  <section class="column viewer-column">
+    <div class="card viewer-card">
+      <h2>3D view <small>robot model from the Campero URDF</small>
+        <span class="views">
+          <button class="link" data-view="iso">iso</button>
+          <button class="link" data-view="side">side</button>
+          <button class="link" data-view="top">top</button>
+          <button class="link" data-view="rear">rear</button>
+        </span></h2>
+      <div class="chips">
+        <label class="chip"><input type="checkbox" data-opt="campero" checked> Campero</label>
+        <label class="chip"><input type="checkbox" data-opt="workspace" checked> Workspace</label>
+        <label class="chip"><input type="checkbox" data-opt="labels" checked> Labels</label>
+        <label class="chip"><input type="checkbox" data-opt="jointFrames"> Joint frames</label>
+        <label class="chip"><input type="checkbox" data-opt="linkFrames"> Link frames</label>
+      </div>
+      <div id="viewer" class="viewer"><div class="viewer-msg muted">Loading 3D model…</div>
+        <div class="viewer-overlay" id="viewer-overlay" hidden>No robot data: the arm is shown with all joints at 0°</div></div>
+      <div class="muted small">Drag to rotate, right-drag to pan, wheel to zoom. Axes: X red, Y green,
+        Z blue. The box is the UR_CONTROL workspace (orange when the TCP is outside); the translucent
+        arm is the target of the previewed move.</div>
     </div>
   </section>
 </main>

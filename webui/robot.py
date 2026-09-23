@@ -107,16 +107,15 @@ class RobotState:
 class RobotLink:
     """Connection to the Campero through UR10Control, plus read-only monitoring."""
 
-    def __init__(self, gripper_topic=config.GRIPPER_FEEDBACK_TOPIC,
-                 gripper_type=config.GRIPPER_FEEDBACK_TYPE):
+    def __init__(self, gripper_topics=config.GRIPPER_FEEDBACK_TOPICS):
         self.ur = None
         self.host, self.port = config.ROBOT_HOST, config.ROBOT_PORT
         self.connecting = False
         self.error = None
         self.gripper_command = None
-        self._gripper_cfg = (gripper_topic, gripper_type)
-        self._gripper_sub = None
-        self._gripper_feedback = None       # (arrival time, text)
+        self._gripper_topics = tuple(gripper_topics)
+        self._gripper_subs = []
+        self._gripper_feedback = None       # (arrival time, text, closed fraction 0..1)
         self._send_lock = threading.Lock()
         self._js = _RateMeter()
         self._ft = _RateMeter()
@@ -151,10 +150,10 @@ class RobotLink:
             # message to every listener of the topic, so no extra rosbridge traffic.
             ur.ros.on("/joint_states", self._on_joint_states)
             ur.ros.on("/robotiq_ft_sensor", self._on_force)
-            topic, msg_type = self._gripper_cfg
-            if topic:
-                self._gripper_sub = roslibpy.Topic(ur.ros, topic, msg_type)
-                self._gripper_sub.subscribe(self._on_gripper)
+            for topic in self._gripper_topics:
+                subscription = roslibpy.Topic(ur.ros, topic, config.GRIPPER_FEEDBACK_TYPE)
+                subscription.subscribe(self._on_gripper)
+                self._gripper_subs.append(subscription)
             self.ur = ur
             log.info("Connected to rosbridge at %s:%s (F/T sensor zeroed by UR10Control)", host, port)
         except Exception as exc:
@@ -173,13 +172,9 @@ class RobotLink:
                 ur.ros.off(topic, callback)
             except KeyError:
                 pass
-        if self._gripper_sub is not None:
-            self._gripper_sub.unsubscribe()
+        for subscription in self._gripper_subs:
+            subscription.unsubscribe()
         ur.close_connection()
-
-    @property
-    def tcp_mode(self):
-        return self.ur.tcp_mode if self.ur is not None else True
 
     # --- monitoring callbacks (run in the roslibpy thread) ------------------------------
 
@@ -210,14 +205,16 @@ class RobotLink:
 
     def _on_gripper(self, msg):
         try:
+            # Same scale as pub_gripper_cmd.py on the Campero: gPO 13 = open (85 mm), 230 = closed
+            closed = min(max((int(msg.get("gPO", 0)) - 13) / (230 - 13), 0.0), 1.0)
             if int(msg.get("gFLT", 0)):
                 text = f"fault 0x{int(msg['gFLT']):02X}"
             elif int(msg.get("gSTA", 0)) != 3:
                 text = "not activated"
             else:
-                closed = int(msg.get("gPO", 0)) / 255 * 100
-                text = f"{closed:.0f} % closed, {_GRIPPER_OBJECT.get(int(msg.get('gOBJ', 0)), 'unknown')}"
-            self._gripper_feedback = (time.monotonic(), text)
+                text = (f"gap {(1 - closed) * 85:.0f} mm, "
+                        f"{_GRIPPER_OBJECT.get(int(msg.get('gOBJ', 0)), 'unknown')}")
+            self._gripper_feedback = (time.monotonic(), text, closed)
         except (TypeError, ValueError):
             log.debug("Unexpected gripper feedback message", exc_info=True)
 
@@ -240,21 +237,23 @@ class RobotLink:
         rates = {"joint_states": self._js.rate(), "ft": self._ft.rate()}
         if js_age is None:
             return RobotState(phase, rates=rates)
+        q = np.array(ur.joint_states, dtype=float)
         return RobotState(
             phase,
-            q=np.array(ur.joint_states, dtype=float),
+            q=q,
             qd=None if self._qd is None else self._qd.copy(),
-            T=np.array(ur.T_current, dtype=float),
+            T=kin.fk(q),   # calibrated model and config.TCP (UR10Control.T_current is nominal)
             force=np.array(ur.current_force, dtype=float),
             torque=np.array(ur.current_torque, dtype=float),
             rates=rates,
         )
 
     def gripper_feedback(self):
+        """(text, closed fraction 0..1) from the gripper driver, or None if it is silent."""
         feedback = self._gripper_feedback
         if feedback is None or time.monotonic() - feedback[0] > 2.0:
             return None
-        return feedback[1]
+        return feedback[1:]
 
     # --- commands (always through UR10Control) ----------------------------------------------
 
@@ -267,12 +266,13 @@ class RobotLink:
         return self.ur
 
     def send_joints(self, q, speed):
+        """Joint target [rad], reached in max|q - current| / speed seconds (UR10Control semantics).
+
+        Cartesian commands also end up here: the panel solves the IK with the
+        calibrated model, so the message is the same single-point trajectory.
+        """
         with self._send_lock:
             self._ready_ur().send_trajectory(np.asarray(q, dtype=float), speed=float(speed), art=True)
-
-    def send_pose(self, T, speed):
-        with self._send_lock:
-            self._ready_ur().send_trajectory(np.asarray(T, dtype=float), speed=float(speed))
 
     def send_gripper(self, command):
         if command not in ("Open", "Close"):
@@ -413,11 +413,11 @@ class Motion:
         target = kin.displace(state.T, direction[:3] * jog["linear"] * horizon,
                               direction[3:] * jog["angular"] * horizon, jog["frame"])
         if not kin.workspace_allows(state.T, target):
-            self._set_status("Blocked at the workspace limit ("
-                             + ", ".join(kin.workspace_violations(target)) + ")", "warning")
+            self._set_status("Blocked by the workspace limits: the TCP would reach "
+                             + ", ".join(kin.workspace_violations(target)), "warning")
             return
         try:
-            q_target = kin.ik(target, state.q, tcp=self.link.tcp_mode)
+            q_target = kin.ik(target, state.q)
         except kin.IKError as exc:
             self._end_jog(f"Jog stopped: {exc}")
             return
@@ -429,7 +429,7 @@ class Motion:
             return
         if motion[worst] < 1e-7:
             return
-        self.link.send_pose(target, speed=min(motion[worst] / horizon, config.JOG_MAX_JOINT_SPEED))
+        self.link.send_joints(q_target, speed=min(motion[worst] / horizon, config.JOG_MAX_JOINT_SPEED))
         self._set_status(f"Jogging {self._describe(direction, 'cartesian')} ({jog['frame']} frame)")
 
     @staticmethod
@@ -476,10 +476,10 @@ class Motion:
                 drot[axis - 3] = direction * np.radians(float(size))
             target = kin.displace(state.T if base is None else base, dp, drot, frame)
             if not kin.workspace_allows(state.T, target):
-                raise MotionError("step blocked by the workspace limits ("
-                                  + ", ".join(kin.workspace_violations(target)) + ")")
+                raise MotionError("step blocked by the workspace limits: the TCP would reach "
+                                  + ", ".join(kin.workspace_violations(target)))
             try:
-                q_target = kin.ik(target, state.q, tcp=self.link.tcp_mode)
+                q_target = kin.ik(target, state.q)
             except kin.IKError as exc:
                 raise MotionError(str(exc)) from exc
             motion = float(np.max(np.abs(q_target - state.q)))
@@ -490,7 +490,7 @@ class Motion:
                            kin.rotation_angle(state.T, target) / angular, 0.2)
             if motion < 1e-7:
                 return
-            self.link.send_pose(target, speed=min(motion / duration, config.JOG_MAX_JOINT_SPEED))
+            self.link.send_joints(q_target, speed=min(motion / duration, config.JOG_MAX_JOINT_SPEED))
             label = kin.CARTESIAN_AXES[axis]
         self._step = (key, target, now + duration + 0.2)
         unit = "mm" if space != "joint" and axis < 3 else "deg"
@@ -505,10 +505,10 @@ class Motion:
             raise MotionError("six numeric joint targets are required")
         if np.any(np.abs(q) > kin.JOINT_LIMIT):
             raise MotionError("joint targets must be within +/-360 deg")
-        T = kin.fk(q, tcp=self.link.tcp_mode)
+        T = kin.fk(q)
         warnings = kin.workspace_violations(T)
         if warnings:
-            warnings = ["TCP target outside the workspace limits (" + ", ".join(warnings) + ")"]
+            warnings = ["TCP target outside the workspace limits: " + ", ".join(warnings)]
         return self._plan(state, q, T, speed_deg_s, warnings)
 
     def plan_pose(self, xyz_mm, rpy_deg, speed_deg_s):
@@ -519,10 +519,10 @@ class Motion:
             raise MotionError("x, y, z, roll, pitch and yaw are required")
         T = kin.xyzrpy_to_pose(np.r_[xyz, rpy])
         if not kin.workspace_allows(state.T, T):
-            raise MotionError("target outside the workspace limits ("
-                              + ", ".join(kin.workspace_violations(T)) + ")")
+            raise MotionError("target outside the workspace limits: "
+                              + ", ".join(kin.workspace_violations(T)))
         try:
-            q = kin.ik(T, state.q, tcp=self.link.tcp_mode)
+            q = kin.ik(T, state.q)
         except kin.IKError as exc:
             raise MotionError(str(exc)) from exc
         return self._plan(state, q, T, speed_deg_s, [])
@@ -550,7 +550,7 @@ class Motion:
         if plan.max_motion < 1e-5:
             log.info("Pose move skipped: already at target")
             return plan
-        self.link.send_pose(plan.T, speed=np.radians(_clamp(speed_deg_s, config.MOVE_SPEED_DEG_S)))
+        self.link.send_joints(plan.q, speed=np.radians(_clamp(speed_deg_s, config.MOVE_SPEED_DEG_S)))
         log.info("Pose move to xyz [%s] mm, rpy [%s] deg, about %.1f s",
                  ", ".join(f"{v:.1f}" for v in xyz_mm), ", ".join(f"{v:.1f}" for v in rpy_deg),
                  plan.duration)

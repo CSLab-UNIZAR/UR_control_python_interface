@@ -1,52 +1,141 @@
-"""Pose helpers built on the framework's kinematics (core.ur10_core).
+"""Arm kinematics of the web panel.
 
-Conventions (same as the rest of UR_CONTROL):
+The arm model is the Campero URDF including this arm's factory calibration
+(webui/static/robot/model.json, built by tools/build_robot_model.py), so poses
+match the teach pendant and RViz. UR_CONTROL's analytic solver (core.ur10_core,
+nominal UR10 parameters, 3-6 mm off) provides the IK seed and the arm branch;
+a few Newton steps on the calibrated model remove the remaining error.
+
+Conventions:
   * joints J1..J6 = shoulder_pan, shoulder_lift, elbow, wrist_1, wrist_2, wrist_3 [rad]
-  * poses are 4x4 transforms of the TCP (tool0 + 0.15 m along tool Z) in the UR10 base frame
-  * roll/pitch/yaw use the ZYX convention: R = Rz(yaw) @ Ry(pitch) @ Rx(roll),
-    identical to SE3.RPY(..., order='zyx') used by the controllers
+  * poses are 4x4 transforms in the UR base frame (campero_ur10_base = pendant "Base")
+  * the TCP is config.TCP relative to the flange (tool0), like the pendant's TCP setting
+  * roll/pitch/yaw: R = Rz(yaw) @ Ry(pitch) @ Rx(roll), as SE3.RPY(..., order='zyx') and UR's RPY
 """
+
+import json
+from pathlib import Path
 
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from core.ur10_core import (
-    WORKSPACE_LIMITS,
-    is_moving_towards_workspace,
-    is_within_workspace,
-    ur10_fkine,
-    ur10_fkine_tcp,
-    ur10_ikine,
-    ur10_ikine_tcp,
-)
+from core.ur10_core import WORKSPACE_LIMITS, ur10_ikine
+from webui import config
 
 JOINT_LIMIT = 2 * np.pi   # software joint limit used by core/kinematics_utils.py
 JOINT_NAMES = ("Base", "Shoulder", "Elbow", "Wrist 1", "Wrist 2", "Wrist 3")
 CARTESIAN_AXES = ("X", "Y", "Z", "Rx", "Ry", "Rz")
+MODEL_PATH = Path(__file__).with_name("static") / "robot" / "model.json"
 
 
 class IKError(RuntimeError):
-    """The framework's IK found no usable solution for a pose."""
+    """No usable inverse-kinematics solution for a pose."""
+
+
+def _transform(xyz_quat):
+    T = np.eye(4)
+    T[:3, :3] = Rotation.from_quat(xyz_quat[3:]).as_matrix()
+    T[:3, 3] = xyz_quat[:3]
+    return T
+
+
+def _pose(xyz, rotvec):
+    T = np.eye(4)
+    T[:3, :3] = Rotation.from_rotvec(rotvec).as_matrix()
+    T[:3, 3] = xyz
+    return T
+
+
+class ArmModel:
+    """Serial chain base frame -> flange, read from the robot model."""
+
+    def __init__(self, model_path, base_frame, flange_frame, joint_names, tcp):
+        joints = {j["child"]: j for j in json.loads(Path(model_path).read_text(encoding="utf-8"))["joints"]}
+
+        def path_from_root(link):
+            path = []
+            while link in joints:
+                path.append(joints[link])
+                link = joints[link]["parent"]
+            return path[::-1]
+
+        base_path, flange_path = path_from_root(base_frame), path_from_root(flange_frame)
+        shared = 0
+        while shared < min(len(base_path), len(flange_path)) and base_path[shared] is flange_path[shared]:
+            shared += 1
+        # base -> common ancestor: inverse of the fixed joints from the ancestor down to the base frame
+        self._start = np.eye(4)
+        for joint in base_path[shared:]:
+            if joint["type"] != "fixed":
+                raise ValueError(f"{base_frame} must be fixed relative to the arm root")
+            self._start = self._start @ _transform(joint["origin"])
+        self._start = np.linalg.inv(self._start)
+        # common ancestor -> flange: fixed origins and the six joint axes
+        self._segments = []
+        for joint in flange_path[shared:]:
+            if joint["type"] == "fixed":
+                self._segments.append((_transform(joint["origin"]), None))
+            elif joint["name"] in joint_names:
+                self._segments.append((_transform(joint["origin"]), np.asarray(joint["axis"], dtype=float)))
+            else:
+                raise ValueError(f"unexpected joint {joint['name']} between {base_frame} and {flange_frame}")
+        if sum(axis is not None for _, axis in self._segments) != 6:
+            raise ValueError("the arm chain must contain exactly six joints")
+        self.tcp = _pose(tcp[:3], tcp[3:])
+        self._tcp_inv = np.linalg.inv(self.tcp)
+
+    def chain(self, q):
+        """Flange pose, joint axes (6x3) and joint positions (6x3), all in the base frame."""
+        T, axes, origins, i = self._start.copy(), [], [], 0
+        for origin, axis in self._segments:
+            T = T @ origin
+            if axis is not None:
+                axes.append(T[:3, :3] @ axis)
+                origins.append(T[:3, 3].copy())
+                step = np.eye(4)
+                step[:3, :3] = Rotation.from_rotvec(axis * q[i]).as_matrix()
+                T = T @ step
+                i += 1
+        return T, np.array(axes), np.array(origins)
+
+    def fk(self, q, tcp=True):
+        flange = self.chain(np.asarray(q, dtype=float))[0]
+        return flange @ self.tcp if tcp else flange
+
+    def ik(self, T, seed, tcp=True):
+        target = np.asarray(T, dtype=float) @ self._tcp_inv if tcp else np.asarray(T, dtype=float)
+        try:   # nominal analytic solution: picks the same arm branch as UR10Control
+            q = np.asarray(ur10_ikine(target, np.asarray(seed, dtype=float)), dtype=float)
+        except Exception as exc:
+            raise IKError("no inverse-kinematics solution for this pose") from exc
+        if q.shape != (6,) or not np.all(np.isfinite(q)):
+            raise IKError("inverse kinematics returned an invalid solution (singular pose)")
+        for _ in range(10):   # Newton steps on the calibrated model
+            flange, axes, origins = self.chain(q)
+            dp = target[:3, 3] - flange[:3, 3]
+            dr = Rotation.from_matrix(target[:3, :3] @ flange[:3, :3].T).as_rotvec()
+            if np.linalg.norm(dp) < 1e-7 and np.linalg.norm(dr) < 1e-7:
+                break
+            J = np.vstack([np.cross(axes, flange[:3, 3] - origins).T, axes.T])
+            q = q + np.linalg.lstsq(J, np.r_[dp, dr], rcond=None)[0]
+        else:
+            raise IKError("no inverse-kinematics solution: the pose is out of reach or singular")
+        if np.any(np.abs(q) > JOINT_LIMIT):
+            raise IKError("the solution exceeds the +/-360 deg joint limits")
+        return q
+
+
+ARM = ArmModel(MODEL_PATH, config.ARM_BASE_FRAME, config.FLANGE_FRAME, config.ARM_JOINTS, config.TCP)
 
 
 def fk(q, tcp=True):
-    """TCP (or flange) pose for joint vector q, as a plain 4x4 ndarray."""
-    solver = ur10_fkine_tcp if tcp else ur10_fkine
-    return np.asarray(solver(np.asarray(q, dtype=float)), dtype=float)
+    """TCP (or flange) pose for joint vector q, calibrated model."""
+    return ARM.fk(q, tcp)
 
 
 def ik(T, seed, tcp=True):
-    """Joint solution closest to `seed`, using the same solver as UR10Control."""
-    solver = ur10_ikine_tcp if tcp else ur10_ikine
-    try:
-        q = np.asarray(solver(np.asarray(T, dtype=float), np.asarray(seed, dtype=float)), dtype=float)
-    except Exception as exc:  # the solver raises when no solution lies in its arm branch
-        raise IKError("no inverse-kinematics solution for this pose") from exc
-    if q.shape != (6,) or not np.all(np.isfinite(q)):
-        raise IKError("inverse kinematics returned an invalid solution (singular pose)")
-    if np.any(np.abs(q) > JOINT_LIMIT):
-        raise IKError("the solution exceeds the +/-360 deg joint limits")
-    return q
+    """Joint solution for a TCP (or flange) pose, closest to `seed`, calibrated model."""
+    return ARM.ik(T, seed, tcp)
 
 
 def pose_to_xyzrpy(T):
@@ -96,20 +185,31 @@ def rotation_angle(T_a, T_b):
 
 
 def workspace_violations(T):
-    """Human-readable list of the workspace limits that pose T violates."""
+    """Which workspace limits the TCP of pose T violates, e.g. 'x = -1312 mm (limits -1300 to -300)'."""
     p = np.asarray(T, dtype=float)[:3, 3]
     out = []
     for i, axis in enumerate("xyz"):
         lo, hi = WORKSPACE_LIMITS[axis]
-        if p[i] < lo:
-            out.append(f"{axis} < {lo * 1000:.0f} mm")
-        elif p[i] > hi:
-            out.append(f"{axis} > {hi * 1000:.0f} mm")
+        if not lo <= p[i] <= hi:
+            out.append(f"{axis} = {p[i] * 1000:.0f} mm (limits {lo * 1000:.0f} to {hi * 1000:.0f})")
     return out
 
 
+def workspace_distance(T):
+    """Distance [m] from the TCP of pose T to the workspace box (0 inside)."""
+    p = np.asarray(T, dtype=float)[:3, 3]
+    lo = np.array([WORKSPACE_LIMITS[axis][0] for axis in "xyz"])
+    hi = np.array([WORKSPACE_LIMITS[axis][1] for axis in "xyz"])
+    return float(np.linalg.norm(p - np.clip(p, lo, hi)))
+
+
 def workspace_allows(T_current, T_target):
-    """The rule of UR10Control.send_trajectory: inside the box, or moving towards it."""
-    T_current = np.asarray(T_current, dtype=float)
-    T_target = np.asarray(T_target, dtype=float)
-    return is_within_workspace(T_target) or is_moving_towards_workspace(T_current, T_target)
+    """Allow a target inside the box, or strictly closer to it than the current pose.
+
+    This is the rule described by core.ur10_core.is_moving_towards_workspace. Its
+    implementation measures the current pose against the *target's* nearest box
+    point, so from inside the box it also accepts targets just outside it; the
+    panel uses the distances to the box itself.
+    """
+    distance = workspace_distance(T_target)
+    return distance == 0.0 or distance < workspace_distance(T_current) - 1e-9

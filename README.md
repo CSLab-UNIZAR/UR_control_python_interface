@@ -9,7 +9,8 @@ On top of the framework there are:
 
 - a **web control panel** (`webui/`): jog in joint or Cartesian space (velocity or
   step), move to joint or pose targets, open and close the gripper, and read joint
-  states, TCP pose, gripper state and force/torque live, all from the browser;
+  states, TCP pose, gripper state and force/torque live, all from the browser. A
+  **3D view** shows the Campero and the arm like RViz, built from the robot's URDF;
 - the original **controllers**: terminal keyboard, 3Dconnexion SpaceMouse, Leap
   Motion hand gestures and force-guided motion.
 
@@ -27,10 +28,11 @@ On top of the framework there are:
 6. [Other controllers](#other-controllers)
 7. [Framework reference](#framework-reference)
 8. [Configuration](#configuration)
-9. [Safety](#safety)
-10. [Troubleshooting](#troubleshooting)
-11. [Linux](#linux)
-12. [Credits](#credits)
+9. [Updating the robot model](#updating-the-robot-model)
+10. [Safety](#safety)
+11. [Troubleshooting](#troubleshooting)
+12. [Linux](#linux)
+13. [Credits](#credits)
 
 ---
 
@@ -47,10 +49,14 @@ On top of the framework there are:
 └──────────────────────────────────┘                 └──────────────────────────────────┘
 ```
 
-A node on the Campero subscribes to `/pub_ik_trajectory` and forwards the
-requested joint positions to the arm. Every command is a `JointTrajectory` with
-a **single point**: six joint positions and a `time_from_start`. The robot
-controller interpolates from the current state to that point.
+On the Campero, `campero_ur10_bringup.launch` starts two small nodes
+(`campero_robot_real_bring_up/scripts`). `pub_ik_trajectory.py` restamps every
+`/pub_ik_trajectory` message and forwards it to the UR driver's
+`/pos_joint_traj_controller/command`. `pub_gripper_cmd.py` turns
+`/pub_gripper_control` into Robotiq commands on `/robotiq_2f_gripper/output`.
+Every arm command is a `JointTrajectory` with a **single point**: six joint positions
+and a `time_from_start`. The joint trajectory controller interpolates from the
+current state to that point.
 
 | ROS name | Type | Direction | Content |
 |---|---|---|---|
@@ -60,12 +66,30 @@ controller interpolates from the current state to that point.
 | `/robotiq_ft_sensor` | `robotiq_ft_sensor/ft_sensor` | robot → PC | `Fx Fy Fz` [N], `Mx My Mz` [Nm] (tool0 frame) |
 | `/robotiq_ft_sensor_acc` (service) | `robotiq_ft_sensor/sensor_accesor` | PC → robot | `command_id: 8` = SET ZERO |
 | `/clock` | `rosgraph_msgs/Clock` | robot → PC | time stamp copied into the command headers |
-| `/Robotiq2FGripperRobotInput` | `robotiq_2f_gripper_control/Robotiq2FGripper_robot_input` | robot → PC | *optional*, read-only gripper feedback shown by the web panel |
+| `/robotiq_2f_gripper/input` | `robotiq_2f_gripper_control/Robotiq2FGripper_robot_input` | robot → PC | *optional*, read-only gripper feedback shown by the web panel |
 
 `UR10Control.send_trajectory(target, speed)` accepts a 4×4 TCP pose (solved with
 the analytic UR10 inverse kinematics) or, with `art=True`, six joint angles. The
 trajectory duration is **largest joint displacement / `speed`**, so `speed` is
 the average speed [rad/s] of the joint that moves the most.
+
+### Frames, TCP and calibration
+
+![Frames in the 3D view](docs/frames.png)
+
+| Frame | Meaning |
+|---|---|
+| `campero_base_link` | Campero mobile base: x forward, z up |
+| `campero_ur10_base` | **UR base**: the controller's *Base*, i.e. the pendant's Base and UR_CONTROL's base frame. It is 0.215 m forward and 0.5885 m above `campero_base_link`, with the same orientation (the URDF mounts `ur10_base_link` rotated 180° and `base` rotates it back) |
+| `campero_ur10_tool0` | tool flange: what the pendant shows with an all-zero TCP |
+| TCP | UR_CONTROL's tool point: flange + 150 mm along the flange Z axis (`tcp_offset` in `core/ur10_core.py`). The URDF puts the gripper tip (`gripper_aruco_link`) at 199 mm |
+
+UR_CONTROL computes FK/IK with the **nominal** UR10 parameters. The controller,
+the pendant and RViz use this arm's **factory calibration**
+(`campero_ur10_calibration.yaml`, loaded into the URDF by the bring-up). The two
+differ by **3–6 mm and up to 0.8°** at the flange. The web panel uses the
+calibrated model (see [Web control panel](#web-control-panel)); the original
+controllers keep the nominal one.
 
 ---
 
@@ -80,11 +104,15 @@ core/                 framework
   plots.py, spacemouse.py, leap_gestures*.py, trajectory.py, ros_structs.py
 controllers/          original controllers (keyboard, SpaceMouse, Leap Motion, force)
 webui/                web control panel  ->  python -m webui
-  config.py             speeds, limits, rates, presets (edit here)
+  config.py             speeds, limits, rates, TCP, presets (edit here)
   robot.py              connection + monitoring + motion logic
-  kinematics.py         pose helpers built on core/ur10_core.py
+  kinematics.py         calibrated arm FK/IK and pose helpers
   server.py             local HTTP server and JSON API
-  static/               page, styles and script served to the browser
+  static/               page (index.html, app.js, app.css) and 3D view (viewer.js)
+    robot/              robot model for the 3D view and kinematics (generated)
+    vendor/three/       three.js r186 (MIT), served locally
+tools/
+  build_robot_model.py  regenerates webui/static/robot from the catkin workspace
 other/                SpaceMouse button maps
 docs/                 images for this README
 requirements.txt      pinned Python dependencies
@@ -93,8 +121,11 @@ run_webui.bat         Windows: start the web panel
 install.sh            Ubuntu installer (original, incl. Leap Motion bindings)
 ```
 
-The panel does not modify `core/`: it calls the same `UR10Control` methods as the
-other controllers, so the Campero receives exactly the same messages.
+The panel does not modify `core/`. Every command goes out through
+`UR10Control.send_trajectory` and `send_gripper_cmd`, so the Campero receives the
+same message format as with the other controllers. For Cartesian commands, the panel
+solves the IK itself with the calibrated model and sends the resulting joint target
+(`art=True`).
 
 ---
 
@@ -179,7 +210,7 @@ run_webui.bat [options]        or        python -m webui [options]
   --listen ADDRESS     panel address; 0.0.0.0 lets other devices open it (default 127.0.0.1)
   --no-connect         start without connecting (connect later from the top bar)
   --no-browser         do not open the browser
-  --no-gripper-feedback   do not subscribe to /Robotiq2FGripperRobotInput
+  --no-gripper-feedback   do not subscribe to the gripper feedback topics
 ```
 
 ### Connection
@@ -201,12 +232,12 @@ One robot connection per run: to change robot, restart the panel.
 ### Robot state (left column)
 
 - **Joints**: J1–J6 in degrees and radians, plus velocity (°/s).
-- **Pose**: position [mm] of the TCP (or of the bare flange) in the UR10 base
-  frame. Orientation is shown as roll/pitch/yaw [°] or as a rotation vector [rad].
-  The card also shows whether the TCP lies inside the workspace limits
-  (see [Comparing with the teach pendant](#comparing-with-the-teach-pendant)).
-- **Gripper**: last command sent, and feedback (percentage closed, object detected, faults) when
-  `/Robotiq2FGripperRobotInput` is published. Otherwise it shows *no feedback topic*.
+- **Pose**: position [mm] of the TCP (or of the bare flange) in the UR base frame,
+  computed with the arm's calibration. Orientation is shown as roll/pitch/yaw [°] or
+  as a rotation vector [rad]. The card also shows whether the TCP lies inside the
+  workspace limits (see [Comparing with the teach pendant](#comparing-with-the-teach-pendant)).
+- **Gripper**: last command sent, and feedback (finger gap, object detected, faults)
+  from `/robotiq_2f_gripper/input`. Without feedback it shows *no feedback topic*.
 - **Force / torque**: current values and a 10 s chart; **zero sensor** calls the
   SET ZERO service.
 - **copy rad / copy SI** copy the joints (rad) or the pose `[x, y, z, roll, pitch, yaw]`
@@ -214,25 +245,80 @@ One robot connection per run: to change robot, restart the panel.
 
 ### Comparing with the teach pendant
 
-By default the two show different things:
+The panel computes poses with the arm's factory calibration, like the pendant. By
+default the two still show different things:
 
-| | Pendant (Move tab) | Panel / UR_CONTROL |
+| | Pendant (Move tab) | Panel |
 |---|---|---|
-| Point | TCP set in *Installation → TCP* (by default the bare flange) | flange + 150 mm along tool Z (`tcp_offset` in `core/ur10_core.py`) |
+| Point | TCP set in *Installation → TCP* (by default the bare flange) | `TCP` in `webui/config.py`: flange + 150 mm along tool Z, as in UR_CONTROL |
 | Orientation | rotation vector RX, RY, RZ [rad] | roll/pitch/yaw [°] |
 
 To compare like with like:
 
 1. On the pendant, set *Feature* to **Base**.
-2. In the panel's Pose card, select **Flange**, or TCP if the pendant's TCP is also
-   150 mm along Z.
+2. In the panel's Pose card, select **Flange**. Alternatively, keep TCP and give the
+   pendant the same TCP (X 0, Y 0, Z 150 mm, no rotation), or copy the pendant's TCP
+   into `TCP` in `webui/config.py`.
 3. Select **Rot. vector rad** in the panel, or set the pendant to *RPY [°]*
    (UR's RPY uses the same convention as the panel).
 
-Joint angles should then agree to about 0.01°, and positions to a few millimetres:
-UR_CONTROL uses the nominal UR10 kinematics, while the pendant uses the robot's factory
-calibration. Near 180°, the rotation vectors (π, 0, 0) and (−π, 0, 0) are the same
-orientation, and so are roll +180° and −180°.
+Joint angles and poses should then agree to the pendant's display precision. Near
+180°, the rotation vectors (π, 0, 0) and (−π, 0, 0) are the same orientation, and so
+are roll +180° and −180°. The other controllers use UR_CONTROL's nominal model,
+which is 3–6 mm off.
+
+### Workspace limits
+
+UR_CONTROL keeps the **TCP** inside a box in the UR base frame
+(`WORKSPACE_LIMITS` in `core/ur10_core.py`): x from −1300 to −300 mm, y from −450 to
+800 mm and z from 200 to 800 mm. That is from 0.3 m to 1.3 m behind the arm base
+(towards the rear of the Campero) and 0.2–0.8 m above it. The panel accepts a
+Cartesian target only if it is **inside the box, or strictly closer to the box than
+the current pose**. So:
+
+- The limits apply to the TCP, 150 mm beyond the flange, not to the flange the
+  pendant usually shows. With the gripper horizontal, the TCP can reach a limit
+  while the flange is still 150 mm inside it.
+- Near a face of the box, only the direction that crosses it is blocked; moving away
+  from it or along it keeps working. From outside the box (e.g. after a joint move),
+  only moves that bring the TCP closer are allowed.
+- A continuous jog checks the target 0.25 s ahead, so it stops a few millimetres
+  before the face.
+
+UR_CONTROL describes the same rule, but its implementation
+(`is_moving_towards_workspace`) measures the current pose against the *target's*
+nearest point of the box. From inside the box it therefore also accepts targets
+outside it: from x = −785 mm it accepts x = −1400 mm, and near a face a jog can cross
+it before being blocked. This is why the limits looked inconsistent. The panel
+measures both poses against the box itself; the other controllers still use
+UR_CONTROL's function.
+
+The message names the axis, where the TCP would end up and the limits, e.g.
+*the TCP would reach x = -1306 mm (limits -1300 to -300)*. The 3D view draws the
+box: blue while the TCP is inside, orange when it is outside. Joint moves and joint
+jogs are not checked (as in UR_CONTROL); the panel only warns when a joint target
+puts the TCP outside the box.
+
+### 3D view
+
+The right column shows the robot as RViz does: the Campero base with its wheels,
+sensors and laser supports, and the UR10 with the FT sensor and the gripper. All of
+it comes from the URDF used on the robot, with the arm calibration, and follows
+`/joint_states` (the gripper follows its feedback, or the last command).
+
+- Frames: **UR base (pendant Base)**, **Campero base_link**, **flange** and **TCP**,
+  plus optional **Joint frames** (J1–J6) and **Link frames** (every URDF link).
+  Axes: X red, Y green, Z blue.
+- **Workspace**: the box above; **Campero**: hide the mobile base for a clear view
+  of the arm; **Labels**: frame names.
+- While jogging in Cartesian space, an arrow at the TCP shows the direction (blue:
+  translation, orange: rotation axis).
+- On the *Move to* tabs, a translucent arm shows the previewed target.
+- Views: *iso*, *side*, *top*, *rear*. Drag to rotate, right-drag to pan, wheel to
+  zoom. The view only redraws when something changes.
+
+The model files (`webui/static/robot/`) are generated from the catkin workspace; see
+[Updating the robot model](#updating-the-robot-model).
 
 ### Jog tab: velocity and step commands
 
@@ -265,8 +351,9 @@ focus; `Esc` always stops.
 held jog streams short targets at 20 Hz. Each target lies 0.25 s ahead of the
 measured state and is sent with `time_from_start = 0.25 s`, so the robot moves at
 the selected speed. Speed ramps up over 0.3 s, and the robot stops within about
-0.25 s of release. Cartesian targets go through the same IK and workspace check as
-`send_trajectory`. A jog stops by itself when:
+0.25 s of release. Cartesian targets are solved with the calibrated IK (seeded by
+UR_CONTROL's solver, so the arm configuration is the same) and checked against the
+[workspace limits](#workspace-limits). A jog stops by itself when:
 
 - the browser stops sending its keep-alive (tab closed or frozen, window loses focus);
 - joint states become stale;
@@ -292,6 +379,8 @@ N clicks give exactly N steps.
 - A pose target is reached with one joint-space motion (like every
   `send_trajectory` call), so **the TCP does not travel in a straight line**. For
   straight paths, jog in Cartesian space.
+- Pose targets use the panel's TCP and roll/pitch/yaw. Don't type a pendant
+  rotation vector into them.
 
 ### STOP
 
@@ -388,8 +477,9 @@ command computed from it would be wrong.
 |---|---|
 | Joint order | J1 `shoulder_pan`, J2 `shoulder_lift`, J3 `elbow`, J4 `wrist_1`, J5 `wrist_2`, J6 `wrist_3` |
 | Units | metres, radians, seconds (the web panel displays mm and degrees) |
-| Base frame | `campero_ur10_base` (the DH base frame of the UR10) |
+| Base frame | `campero_ur10_base` (the DH base frame of the UR10 = the pendant's Base) |
 | TCP | `tool0` + 0.15 m along the tool Z axis (`tcp_offset` in `core/ur10_core.py`) |
+| Kinematic model | nominal UR10 DH parameters (3–6 mm from the calibrated arm; the web panel uses the calibration) |
 | Roll/pitch/yaw | ZYX: `R = Rz(yaw) · Ry(pitch) · Rx(roll)`, as `SE3.RPY(..., order='zyx')` |
 | Workspace limits | x ∈ [−1.30, −0.30] m, y ∈ [−0.45, 0.80] m, z ∈ [0.20, 0.80] m (`WORKSPACE_LIMITS`) |
 | Joint limits | ±360° (`core/kinematics_utils.py`) |
@@ -409,6 +499,13 @@ are in `webui/kinematics.py`.
   that `send_trajectory` does not accept; only `force_control2()` (the default) runs.
 - Cartesian commands only work in the IK branch above. Far from it, the IK
   jumps or fails; use joint moves to go back.
+- `core/ur10_core.py: is_moving_towards_workspace()` compares the current pose with
+  the target's nearest box point instead of its own, so `send_trajectory` accepts
+  some targets outside the workspace (see [Workspace limits](#workspace-limits)).
+  Comparing `np.linalg.norm(p - clamp(p))` for both poses would fix it.
+- The nominal kinematics put Cartesian targets of the original controllers 3–6 mm
+  away from where the calibrated robot actually goes (see
+  [Frames, TCP and calibration](#frames-tcp-and-calibration)).
 
 ---
 
@@ -427,8 +524,29 @@ Panel settings live in `webui/config.py`. The most relevant ones:
 | `LINEAR_SPEED_MM_S`, `ANGULAR_SPEED_DEG_S`, `JOINT_JOG_SPEED_DEG_S`, `MOVE_SPEED_DEG_S` | (default, min, max) | slider ranges |
 | `STOP_BRAKE_S` | 0.4 s | duration of the STOP trajectory |
 | `CONFIRM_ABOVE_DEG` | 45° | moves larger than this ask for confirmation |
-| `GRIPPER_FEEDBACK_TOPIC` | `/Robotiq2FGripperRobotInput` | set to `None` to disable |
+| `TCP` | `(0, 0, 0.15, 0, 0, 0)` | TCP relative to the flange (x, y, z m, rotation vector rad), written like the pendant's TCP setting |
+| `ARM_BASE_FRAME`, `FLANGE_FRAME`, `ARM_JOINTS` | `campero_ur10_base`, `campero_ur10_tool0`, `campero_ur10_*` | how the arm is found in the robot model |
+| `GRIPPER_FEEDBACK_TOPICS` | `/robotiq_2f_gripper/input`, `/Robotiq2FGripperRobotInput` | gripper status topics watched; `()` disables them |
 | `PRESET_POSES_DEG` | force-control start | built-in joint presets |
+
+---
+
+## Updating the robot model
+
+The 3D view and the panel kinematics read `webui/static/robot/model.json` and
+`meshes.glb`. Both are generated from the Campero catkin workspace: the robot
+description `campero_DLO.urdf.xacro`, expanded with the arm calibration exactly as
+`campero_ur10_bringup.launch` does. Regenerate them when the robot description or
+the calibration changes (for example after copying a new
+`campero_ur10_calibration.yaml`):
+
+```powershell
+.venv\Scripts\python -m pip install xacro==2.1.1 trimesh pycollada   # only needed for this step
+.venv\Scripts\python tools\build_robot_model.py --src <path to catkin_ws>\src
+```
+
+The tool finds the ROS packages under `--src` by their `package.xml`, so ROS does not
+need to be installed. Use `--xacro` for a different robot file.
 
 ---
 
@@ -455,7 +573,8 @@ Panel settings live in `webui/config.py`. The most relevant ones:
 | *Waiting for /joint_states* | The UR bring-up is not running, or *Play* was not pressed on the pendant. |
 | Worked once, not after reconnecting | Restart the rosbridge launch on the Campero. |
 | *No IK solution* / *IK jump* | Pose outside the IK branch or near a singularity: jog in joint space. |
-| *Blocked at the workspace limit* | Limits are in `WORKSPACE_LIMITS` (`core/ur10_core.py`). |
+| *Blocked by the workspace limits* | The TCP would leave the box: see [Workspace limits](#workspace-limits). |
+| *3D view unavailable* | The browser has WebGL disabled: enable hardware acceleration, or use a current Edge/Chrome/Firefox. |
 | Pose differs from the pendant | Different TCP and orientation format: see [Comparing with the teach pendant](#comparing-with-the-teach-pendant). |
 | `setup.bat`: *No supported Python found* | Install Python 3.12 (python.org) with the py launcher. |
 | `run_webui.bat`: port already in use | The panel is already open, or use `--http-port 8081`. |
@@ -481,4 +600,5 @@ python3 -m webui
 Original UR_CONTROL framework and controllers by **Adrián Fortea Valencia**
 (internship report *Memoria de Prácticas*, July 2025); the report credits the
 kinematics functions (`kinematics_utils.py`) to **Miguel Burgh**. Web control
-panel and Windows setup added on top without changing the framework.
+panel and Windows setup added on top without changing the framework. The 3D view
+uses [three.js](https://threejs.org) (MIT license, in `webui/static/vendor/three`).
