@@ -1,0 +1,138 @@
+# =============================================================================
+#  Example 4 (04_shape_servoing.py): model-free shape servoing (image or camera space)
+# =============================================================================
+# Read at start-up by examples/04_shape_servoing.py: restart it after editing.
+# Another file can be used with --settings FILE.
+#
+#  - Units: px (image pixels), mm (camera frame, up to scale), deg, s, unless a comment says otherwise.
+#  - Missing keys take built-in defaults (examples/shape_servoing/settings.py).
+#    Unknown keys and invalid values stop the program with a message naming the key.
+#  - The robot address, TCP, workspace box and safety limits come from
+#    ur10_config.yaml, as in the other examples.
+
+# --- Camera ------------------------------------------------------------------
+camera:
+  source: realsense            # realsense: Intel RealSense D435/D415 colour stream (pyrealsense2)
+                               # webcam: any OpenCV camera, to try the vision part without the RealSense
+  serial: ""                   # RealSense serial number; "" = the first one found
+  device: 0                    # webcam index (source: webcam)
+  width: 640                   # colour stream resolution, px. D435/D415 also offer 848x480, 1280x720,
+  height: 480                  # 1920x1080 (more precise features, slower detection)
+  fps: 30                      # frames per second (6, 15, 30, or 60 up to 848x480)
+
+# --- ArUco markers -------------------------------------------------------------
+# The markers are always taken in increasing ID order: with markers 10, 11 and
+# 20 the edges are 10->11 and 11->20, and the curvature is measured at 11.
+markers:
+  dictionary: DICT_4X4_50      # OpenCV ArUco dictionary of the printed markers
+  ids: []                      # marker IDs of the object, e.g. [10, 20, 30]; [] = every marker detected
+                               # (other markers in view, e.g. on the table, would then join the chain)
+  refine_corners: true         # sub-pixel corner refinement (more precise centres, a bit slower)
+  size: 40                     # mm: side of the printed markers. Only sets the scale of the 3D
+                               # (camera frame) features: a wrong value scales them all alike
+
+# --- Marker tracking: one Kalman filter per marker (constant velocity) ----------
+# The filter trusts the detections much more than its motion model (process
+# noise >> measurement noise), so it follows the detections closely. Its job is
+# to bridge frames where a marker is not detected (blur, glare, occlusion): the
+# marker is then predicted from its last velocity, and dropped after max_missing.
+tracking:
+  measurement_noise: 1.0       # px: standard deviation of a detected marker centre
+  process_noise: 3000          # px/s^2: standard deviation of the unmodelled acceleration
+  confirm_frames: 2            # a new marker is used after being detected in this many frames
+  max_missing: 0.5             # s: an undetected marker is dropped after this long
+  velocity_decay: 0.7          # 0-1: fraction of the velocity kept per frame while undetected
+                               #      (0: hold the last position, 1: keep moving at the last velocity)
+  measurement_noise_3d: 3.0    # mm: the same for the 3D positions (camera frame; depth is the noisiest)
+  process_noise_3d: 3000       # mm/s^2
+
+# --- Shape features ------------------------------------------------------------
+# In the image (2D, px) or in the camera frame (3D, mm up to scale), for N markers:
+# position:  positions of the markers                     2N / 3N values
+# edges:     vector from each marker to the next           2(N-1) / 3(N-1)
+# curvature: angle between consecutive edges [deg]        N-2
+#            image: signed (positive = the chain turns clockwise on the screen)
+#            camera: unsigned (0-180)
+features:
+  space: position              # position | edges | curvature at start-up (switch live with 1/2/3)
+  frame: image                 # image (2D) | camera (3D) at start-up (switch live with M)
+  record_time: 0.5             # s: "Record target" averages the marker positions over this time
+  tolerance:                   # the target is reached when the RMS feature error stays below this
+    position: 3.0              # px
+    edges: 3.0                 # px
+    curvature: 1.5             # deg
+  tolerance_3d:                # the same in the camera frame
+    position: 3.0              # mm
+    edges: 3.0                 # mm
+    curvature: 1.5             # deg
+
+# --- Joint teleoperation (hold Q/A W/S E/D R/F T/G Y/H or the jog buttons) ----------
+teleop:
+  joint_speed: 5               # deg/s at start-up (change it live with - and +)
+  max_joint_speed: 15          # deg/s: upper end of the - / + range
+
+# --- Back to start / Home -------------------------------------------------------------
+moves:
+  speed: 10                    # deg/s: speed of the joint that moves the most
+  home: []                     # J1..J6 in deg, e.g. [0.27, -90.42, 95.21, -125.32, -90.15, 0.48];
+                               # [] = no home position (the Home button is disabled)
+
+# --- Offline Jacobian initialisation ("Probe Jacobian") ----------------------------
+# From the current configuration q0, each joint moves to +amplitude, to
+# -amplitude and back to q0 (cycles times) while the marker motion is recorded.
+# A least-squares fit of  s - s0 = J (q - q0) + b  over all samples gives J0 for
+# the three feature spaces at once. Probe near the configuration you servo
+# from, with the markers staying in view (reduce the amplitudes if they leave it).
+probe:
+  amplitude: [5, 5, 5, 5, 5, 5]   # deg, J1..J6. 0 = do not probe that joint: it is then
+                                        #      not used by the controller either
+  speed: 5                     # deg/s during the excitation
+  settle: 0.5                  # s at rest at q0 before moving (reference samples)
+  cycles: 1                    # back-and-forth excitations per joint
+
+# --- Servo loop ("Start control") ----------------------------------------------
+# Damped pseudoinverse (damped least squares) step towards the target s*:
+#     qdot = -gain * J^T (J J^T + mu^2 I)^-1 (s - s*),     mu = damping * largest singular value of J
+control:
+  rate: 25                     # Hz: control rate (joint velocity commands)
+  gain: 0.5                    # 1/s: the feature error decays roughly as exp(-gain * t)
+  damping: 0.05                # relative damping of the pseudoinverse, 0 = plain pseudoinverse.
+                               # Larger: smoother and safer near singular J, but slower
+  max_joint_speed: 8           # deg/s: joint velocities are scaled down together above this
+  settle_time: 1.0             # s: the error must stay below the tolerance this long to finish
+  timeout: 60                  # s: give up after this
+  max_image_age: 0.3           # s: an older camera image counts as lost (the arm holds still)
+
+# --- Online Jacobian update (Broyden) ---------------------------------------------
+# Each time the joints have moved by min_step since the last update:
+#     J <- J + alpha * (ds - J dq) dq^T / (dq^T dq)
+broyden:
+  enabled: true
+  alpha: 0.2                   # 0-1: update rate (1 = classic Broyden; smaller = less noise-sensitive)
+  min_step: 0.5                # deg: joint motion (norm) between two updates
+  keep: false                  # true: the next run starts from the updated J instead of the probed J0
+
+# --- Live window ---------------------------------------------------------------------
+display:
+  fps: 25                      # image space redraws per second (drawing never delays the control loop)
+  plot_fps: 10                 # time plot redraws per second
+  window: 30                   # s of history in the time plots (the saved summary shows it all)
+  image: color                 # color | gray | none: camera image under the overlays
+  brightness: 0.75             # 0-1: image brightness, so that the overlays stand out
+  downsample: 1                # show every n-th image pixel (faster drawing of large images)
+  curvature_scale: 25          # px of circle radius per rad of curvature (90 deg: 42 px with min_radius 3)
+  min_radius: 3                # px: radius of the curvature circles at zero curvature
+
+# --- Run logger ("Log runs" toggle, key L) ------------------------------------------
+# While on, every servo run ("Start control") is saved in its own folder,
+# <plots.save_dir of ur10_config.yaml>/<folder>/<date>_<feature set>/:
+#   signals.csv   every logged signal of the run, one row per control cycle
+#   meta.json     settings, target, Jacobians (probed and final), outcome
+#   window.mp4    video of the whole window (image space, 3D view and plots)
+#   camera.mp4    video of the raw camera images
+logger:
+  enabled: true                # state of the toggle at start-up
+  folder: shape_servoing       # sub-folder of runs/
+  window_video: true
+  camera_video: true
+  video_fps: 15                # frames per second of both videos

@@ -17,10 +17,11 @@ with Robot() as robot:                     # address, TCP, workspace, caps: ur10
     robot.close_gripper()
 ```
 
-Three example programs in [`examples/`](../examples) show typical control
+Four example programs in [`examples/`](../examples) show typical control
 processes, each with a live dashboard and a saved summary figure: pose control
-toward target frames, velocity control along a path, and compliant
-teleoperation with the force sensor.
+toward target frames, velocity control along a path, compliant teleoperation
+with the force sensor, and model-free shape servoing in image or camera space
+with a RealSense camera and ArUco markers.
 
 ---
 
@@ -117,7 +118,7 @@ read it at start-up; restart them after editing.
 | `link_check` | the start-up check of `robot.check_command_link()` |
 | `plots` | history window and refresh rate of the live plots, folder of the saved figures |
 | `panel` | web panel: address, jog rates, sliders, step sizes, presets |
-| `examples` | defaults of the three examples: targets, gains, speeds, path shape, dead bands |
+| `examples` | defaults of examples 1–3: targets, gains, speeds, path shape, dead bands (example 4 has its own file, `examples/04_shape_servoing.yaml`) |
 
 - **Units**: mm, deg, s, N and Nm, as on the pendant and in the panel. The
   Python API itself uses SI units (m, rad); `Robot` converts.
@@ -500,9 +501,10 @@ with Robot(max_linear_speed=0.05) as robot:
 ## Examples
 
 Run them from the repository root with the environment's Python. `--help` lists
-all options. All three:
+all options. All four:
 
-- take their defaults from the `examples:` section of `ur10_config.yaml`; the
+- take their defaults from the `examples:` section of `ur10_config.yaml`
+  (example 4: from its own file, `examples/04_shape_servoing.yaml`); the
   command-line options override them, **in the same units (mm, deg, N)**;
 - first run `robot.check_command_link()` (wrist 3 wiggles by 1°);
   `--no-link-check` skips it;
@@ -598,6 +600,171 @@ python examples/03_force_teleop.py --rotate
 The workspace box still applies: the TCP stops at its faces and slides along
 them.
 
+### 4. Model-free shape servoing – `examples/04_shape_servoing.py`
+
+A fixed Intel RealSense (D435 or D415, colour stream) watches ArUco markers on
+an object held by the gripper, e.g. a cable. The markers, taken **in
+increasing ID order**, define its shape, and the arm drives that shape to a
+recorded target. Nothing is modelled (camera, arm kinematics or object): the
+Jacobian `J` relating joint motions to feature changes, `ds = J dq`, is
+estimated from data.
+
+**Set-up.** Print markers of the dictionary in `markers.dictionary`
+(`DICT_4X4_50` by default) and fix them along the object with increasing IDs
+(e.g. 10, 20, 30, 40 from the gripper outwards). At least 3 are needed; 4–5
+work better. If other markers are in view (e.g. on the table), list the
+object's in `markers.ids`: otherwise they join the chain in ID order.
+
+**Feature spaces** (switch with the selector or the keys 1/2/3, even while servoing):
+
+| Space | Features of N markers p₁…p_N | 2D image | 3D camera frame |
+|---|---|---|---|
+| `position` | marker positions | 2N values [px] | 3N values [mm] |
+| `edges` | eᵢ = pᵢ₊₁ − pᵢ, the vector to the next marker | 2(N−1) [px] | 3(N−1) [mm] |
+| `curvature` | angle between eᵢ and eᵢ₊₁, at pᵢ₊₁ [deg] | N−2, signed (positive: clockwise on the screen) | N−2, unsigned (0–180°) |
+
+**Frames: 2D image or 3D camera frame** (the *Frame* selector or the key M,
+also while servoing). In 3D, the position of each marker in the camera frame
+comes from its four corners (`cv2.solvePnP` with the camera intrinsics read
+from the RealSense and the nominal side `markers.size`). A wrong marker size
+scales all 3D features alike, which does not matter for this data-driven
+control. Every feature set has its own name, used in the status, the plots
+and the logs: `position`, `edges`, `curvature` (image) and `position3d`,
+`edges3d`, `curvature3d` (camera frame). Probing fits the Jacobians of all six
+at once. In 3D the image shares its place with a **3D view** (x right, depth,
+−y up): the chain, its curvature (dots that grow with the angle), the target
+(dashed) and the trajectory of every marker over the plot window. Drag it to
+rotate.
+
+**Workflow** (buttons numbered in this order; keys in brackets):
+
+0. *Open gripper* [O], place the object, *Close gripper* [C].
+1. Jog the joints until the shape is the one wanted (hold a jog button, or
+   Q/A W/S E/D R/F T/G Y/H for J1…J6 ±; −/+ change the jog speed), then
+   *Record target* [Enter]: the marker centres and 3D positions averaged over
+   0.5 s. The target is also saved in `runs/shape_target_<date>.json`.
+2. *Back to start* [B]: the joints at start-up, or those stored with
+   *Start = here* [I]. *Home* [N] goes to `moves.home`, if set.
+3. *Probe Jacobian* [P]: from the current joints q₀, each joint moves to
+   +amplitude, −amplitude and back (±10° J1–J3, ±15° J4–J6 by default) while
+   every camera frame is recorded. A least-squares fit of
+   `s − s₀ = J (q − q₀) + b` over all samples gives the offline estimate J₀,
+   for the six feature sets at once. The status card shows the number of
+   samples, the fit residual and cond(J₀) of the active one.
+4. *Start control* [V]: damped-pseudoinverse servoing at 25 Hz,
+
+   ```
+   qdot = −gain · Jᵀ (J Jᵀ + μ² I)⁻¹ (s − s*),     μ = damping · σ_max(J)
+   ```
+
+   scaled down together if a joint would exceed `control.max_joint_speed`, with a
+   Broyden update of J every time the joints moved by `broyden.min_step`:
+
+   ```
+   J ← J + α (Δs − J Δq) Δqᵀ / (Δqᵀ Δq)
+   ```
+
+   It stops when the RMS feature error stays below `features.tolerance`
+   (`tolerance_3d` in 3D) for `settle_time`, on `timeout`, or with *STOP*
+   [Space / Esc].
+5. Repeat any step: back to start, record a new target, probe again, control
+   again, in any feature space and frame.
+
+**Run logger.** With *Log runs* on (button or key L; default `logger.enabled`),
+every servo run is saved in its own folder,
+`runs/shape_servoing/<date>_<feature set>/`:
+
+| File | Contents |
+|---|---|
+| `signals.csv` | every logged signal during the run, one row per control cycle; first column `t_run` [s] |
+| `meta.json` | settings, feature set, target (2D and 3D), probed J₀ of every feature set, final J, outcome, duration, final RMS error |
+| `window.mp4` | the whole window (image space, 3D view, plots, status) at `logger.video_fps` |
+| `camera.mp4` | the raw camera images at the same rate |
+
+The videos are written by background threads at a fixed rate (the newest frame
+at each tick), so their duration is the real duration of the run, and neither
+the window nor the control loop waits for the encoder. While a run is logged,
+the image shows a red **● REC** and the status card the folder name. Toggling
+the logger applies from the next run.
+
+**Marker tracking.** Each marker has constant-velocity Kalman filters, one for
+its pixel centre and one for its 3D position, that trust the detections much more than the model (process
+noise ≫ measurement noise). It follows the detections closely and bridges
+frames where a marker is not detected: the marker is predicted (drawn hollow)
+for up to `tracking.max_missing` s before being dropped.
+
+**Safety.**
+
+- Every joint-velocity command (jog and control) is checked against the
+  workspace box of `ur10_config.yaml`: if the TCP would leave it, the arm brakes
+  and the status names the limit.
+- The whole probing motion is checked against the box before it starts.
+- If a target marker is lost or the image is older than
+  `control.max_image_age`, the arm holds still until it is back.
+- Speeds are capped by `teleop`, `moves`, `probe` and `control` in the
+  settings file. STOP is not an emergency stop.
+
+**Window.** Left: the camera image with the markers (blue), edges (orange
+arrows), curvature (green circles that grow with the angle) and the target
+(squares, dashed polyline and circles); under it the buttons, the feature space
+and frame selectors, the jog buttons and a status card (mode, markers, gripper,
+logging, progress, Jacobian). Right, for the active frame: the three feature spaces over time (blue, orange, green;
+target values as triangles on the right edge), the joint velocities (measured
+and commanded), the feature error of the active space with its norm and
+tolerance, and the condition number of the Jacobian estimates. Only the parts
+that change are redrawn (blitting): the image at `display.fps`, the plots at
+`display.plot_fps`.
+
+**Settings** (`examples/04_shape_servoing.yaml`, checked like `ur10_config.yaml`):
+
+| Section | Contents |
+|---|---|
+| `camera` | `realsense` or `webcam`, serial number, resolution, fps |
+| `markers` | ArUco dictionary, marker IDs to use, sub-pixel corners, marker size (scale of the 3D features) |
+| `tracking` | Kalman filters: measurement and process noise (2D and 3D), confirmation frames, how long a lost marker is predicted |
+| `features` | feature space and frame at start-up, target averaging time, tolerances (2D and 3D) |
+| `teleop`, `moves` | jog speed, speed of *Back to start* / *Home*, home joints |
+| `probe` | amplitude per joint (0 = not probed and not controlled), speed, settle time, cycles |
+| `control` | rate, gain, damping, joint speed cap, settle time, timeout, largest image age |
+| `broyden` | on/off, update rate α, joint step between updates, keep J between runs |
+| `display` | redraw rates, history window, image mode and brightness, curvature circle size |
+| `logger` | *Log runs* at start-up, sub-folder of `runs/`, which videos, video frame rate |
+
+```bash
+python examples/04_shape_servoing.py
+python examples/04_shape_servoing.py --space curvature --target runs/shape_target_20260924_101500.json
+python examples/04_shape_servoing.py --frame camera           # 3D features from the start
+python examples/04_shape_servoing.py --camera-only        # no robot: camera, markers, features, targets
+```
+
+At the end (window closed or `Ctrl+C`) the arm brakes, the summary figure is
+saved in `runs/shape_servoing_<date>.png`, and every logged signal in
+`runs/shape_servoing_<date>.npz` (`t`, `data`, `columns`, the target and the
+Jacobians). Column names: `q1`…, `qd1`… (measured) and `qc1`… (commanded) in
+deg and deg/s, `position:u10`, `edges:x10-20`, `curvature:10-20-30` (deg),
+`position3d:x10`, `edges3d:z10-20` (mm), `curvature3d:10-20-30`,
+`target:…`, `error:…`, `error_norm:<feature set>` and `cond:<feature set>`.
+
+The code is split into small modules under `examples/shape_servoing/`:
+`vision.py` (camera, detection, 3D positions, Kalman trackers), `features.py`,
+`jacobian.py` (fit, Broyden, damped pseudoinverse), `session.py` (the control
+thread and its tasks), `logger.py` (run logs and videos), `display.py` (the
+window) and `settings.py`. `vision`, `features` and
+`jacobian` work without a robot, for your own experiments.
+
+Tips:
+
+- Probe near the configuration you servo from, with the markers in view all
+  along (reduce `probe.amplitude` otherwise: the status reports joints with too
+  few samples).
+- The joints do not return to the configuration where the target was recorded:
+  the shape does. Different joint configurations can give the same shape,
+  especially with few features (curvature).
+- A tolerance below the feature noise is never reached (timeout). Curvature
+  gets noisier the closer the markers are to each other.
+- In 3D, depth is the noisiest coordinate (it comes from the apparent size of
+  each marker): larger markers, or a closer camera, make it steadier.
+
 ---
 
 ## Troubleshooting
@@ -615,3 +782,8 @@ them.
 | No plot window | Install Tk (`sudo apt install python3-tk` on Ubuntu); on Windows reinstall Python with *tcl/tk*. |
 | The arm drifts in the teleop example | Zero the sensor again with the gripper free (restart the example), or raise `--dead-band`. |
 | Second `Robot(...)` in the same script fails | One `Robot` per process: reuse the first one. |
+| Example 4: markers of the table join the shape | List the object's markers in `markers.ids` of `examples/04_shape_servoing.yaml`. |
+| Example 4: *probing stopped: … would take the TCP out of the workspace* | Reduce `probe.amplitude`, start from a pose farther from the box faces, or widen `workspace:`. |
+| Example 4: *too few samples with all of markers …* | Markers left the image during probing: reduce `probe.amplitude` for the joints named, or move the camera. |
+| Example 4: control ends with a timeout close to the target | The tolerance is below the feature noise: raise `features.tolerance`, or space the markers more (curvature). |
+| Example 4: camera errors | See the README's troubleshooting (USB 3, udev rules on Linux); `--camera-only` tests the camera without the robot. |

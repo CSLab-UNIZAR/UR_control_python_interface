@@ -113,6 +113,7 @@ panel:
 
 # --- Examples (examples/*.py) --------------------------------------------------
 # Defaults of each example; its command-line options override them (same units).
+# Example 4 (04_shape_servoing.py) has its own file: examples/04_shape_servoing.yaml.
 examples:
 
   pose_frames:                 # 01_pose_frames.py: align the TCP with target frames

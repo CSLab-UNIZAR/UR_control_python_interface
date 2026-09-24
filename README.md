@@ -12,8 +12,9 @@ On top of the framework there are:
   states, TCP pose, gripper state and force/torque live, all from the browser. A
   **3D view** shows the Campero and the arm like RViz, built from the robot's URDF;
 - a **Python API** (`ur10api/`) for your own control code: read joints, TCP pose,
-  force/torque and gripper, and send position or velocity commands, with three
-  example programs with live dashboards (`examples/`) and a
+  force/torque and gripper, and send position or velocity commands, with four
+  example programs with live dashboards (`examples/`), among them model-free
+  shape servoing with a RealSense camera and ArUco markers, and a
   [developer guide](docs/ur10api.md);
 - one commented **settings file**, `ur10_config.yaml`: robot address, TCP,
   workspace limits, safety limits, panel settings and the examples' gains;
@@ -116,7 +117,9 @@ ur10api/              Python API for your own control code (docs/ur10api.md)
   kinematics.py         calibrated FK/IK (ArmModel) and workspace box (Workspace)
   transforms.py         pose helpers (trans, rotz, displace, pose_error, ...)
   viz.py                live plots: Dashboard (3D views + time plots), FrameView
-examples/             ur10api demos: pose control, velocity path, force teleoperation
+examples/             ur10api demos: pose control, velocity path, force teleoperation, shape servoing
+  04_shape_servoing.yaml  settings of the shape servoing example (camera, markers, gains, ...)
+  shape_servoing/         its building blocks: vision + Kalman tracking, features, Jacobian, control, logger, window
 runs/                 summary figures saved by the examples (not tracked)
 webui/                web control panel  ->  python -m webui
   config.py             the panel's settings, read from ur10_config.yaml
@@ -501,17 +504,22 @@ with Robot() as robot:                          # settings from ur10_config.yaml
 | `examples/01_pose_frames.py` | pose control: the TCP aligns with target frames defined in the tool or base frame (P-controller on velocity, or joint moves) |
 | `examples/02_velocity_path.py` | velocity control: the TCP follows a circle or an infinity shape (feed-forward + P feedback) |
 | `examples/03_force_teleop.py` | compliant teleoperation: push the gripper and the arm follows the force/torque sensor (admittance control) |
+| `examples/04_shape_servoing.py` | model-free shape servoing: a RealSense camera tracks ArUco markers on an object held by the gripper, and the arm drives their positions, edges or curvature, in the image (2D) or the camera frame (3D), to a recorded target (Jacobian probed offline, Broyden-updated online, damped pseudoinverse); optional run logger with signals and videos |
 
 Run them from the repository root, e.g. `python examples/01_pose_frames.py --help`.
-Their defaults (targets, gains, path, dead bands…) are in the `examples:`
-section of `ur10_config.yaml`; command-line options override them. Each one:
+The defaults of examples 1–3 (targets, gains, path, dead bands…) are in the
+`examples:` section of `ur10_config.yaml`; example 4 has its own settings file,
+`examples/04_shape_servoing.yaml`. Command-line options override them. Each one:
 
 - first checks the **command link**: right after connecting, the first commands
   can take a few seconds to reach the arm, so wrist 3 moves back and forth by 1°
   until three moves in a row arrive promptly (`--no-link-check` skips it);
 - shows a live **dashboard**: an overview of the arm, a 3D close-up with the
   reference and the path the TCP really followed, and time plots of the target
-  against the measured state;
+  against the measured state (example 4: the camera image with the markers and
+  the target, a 3D view in the camera frame, the feature spaces, the joint velocities, the feature error and
+  the condition number of the Jacobian, with buttons for the workflow, the
+  gripper and joint jogging);
 - on `Ctrl+C`, when the window is closed or at the end, brakes and turns the
   window into a **summary** of the whole run, saved as a PNG in `runs/`.
 
@@ -652,7 +660,7 @@ panel: mm, deg, s, N, Nm.
 | `link_check` | start-up check of the command link used by the examples |
 | `plots` | live plots of the examples: history window, refresh rate, folder of the saved figures |
 | `panel` | panel address (127.0.0.1:8080), jog watchdog and streaming, slider ranges, step sizes, confirmation threshold, joint presets |
-| `examples` | defaults of the three examples: targets, gains, tolerances, path shape and size, dead bands |
+| `examples` | defaults of examples 1–3: targets, gains, tolerances, path shape and size, dead bands (example 4: `examples/04_shape_servoing.yaml`) |
 
 The file is checked when it is read: an unknown key or an invalid value stops
 the program with a message naming the key, so a typo never silently disables a
@@ -719,6 +727,8 @@ need to be installed. Use `--xacro` for a different robot file.
 | *The existing .venv was not created on this system* | The folder is shared between Windows and Linux: run `./setup.sh --recreate` (or `.\setup.ps1 -Recreate`). |
 | Linux: `Cannot connect … Name or service not known` | `.local` names need mDNS: `sudo apt install avahi-daemon libnss-mdns`, or use the IP with `--host`. |
 | Linux: no browser opens | No desktop session (SSH, container): open <http://localhost:8080> yourself, or forward it with `ssh -L 8080:localhost:8080 user@pc`. |
+| Example 4: *no RealSense camera found* / *cannot start the RealSense colour stream* | Use a USB 3 port and cable, and close other programs using the camera (RealSense Viewer). Check `camera:` in `examples/04_shape_servoing.yaml` (resolution and fps must be a mode of the camera). |
+| Linux, example 4: the RealSense is not found although it is plugged in | Install the librealsense udev rules: copy `config/99-realsense-libusb.rules` from the [librealsense repository](https://github.com/IntelRealSense/librealsense) to `/etc/udev/rules.d/`, then `sudo udevadm control --reload-rules && sudo udevadm trigger` and replug the camera. |
 
 ---
 
