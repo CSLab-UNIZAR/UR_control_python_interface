@@ -500,6 +500,9 @@ with Robot(max_linear_speed=0.05) as robot:
 
 ## Examples
 
+[examples/README.md](../examples/README.md) is a quick visual tour (how to run
+each example and what a real run looks like); this section has the details.
+
 Run them from the repository root with the environment's Python. `--help` lists
 all options. All four:
 
