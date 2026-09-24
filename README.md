@@ -23,6 +23,19 @@ On top of the framework there are:
 
 ![Web control panel](docs/webui.png)
 
+The [example programs](examples/README.md), on the real robot:
+
+<table>
+  <tr>
+    <td align="center" width="50%"><a href="examples/README.md#1-pose-control-toward-target-frames"><img src="examples/assets/01_pose_frames.png" alt="Pose control toward target frames"></a><br><b>1. Pose control</b>: the TCP visits target frames</td>
+    <td align="center" width="50%"><a href="examples/README.md#2-velocity-control-along-a-path"><img src="examples/assets/02_velocity_path.png" alt="Velocity control along a path"></a><br><b>2. Velocity control</b>: the TCP follows an infinity path</td>
+  </tr>
+  <tr>
+    <td align="center"><a href="examples/README.md#3-compliant-teleoperation"><img src="examples/assets/03_force_teleop.png" alt="Compliant teleoperation"></a><br><b>3. Compliant teleoperation</b>: push the gripper, the arm follows</td>
+    <td align="center"><a href="examples/README.md#4-model-free-shape-servoing"><img src="examples/assets/04_shape_servoing_window.gif" alt="Model-free shape servoing"></a><br><b>4. Shape servoing</b>: a cable driven to a target shape, model-free</td>
+  </tr>
+</table>
+
 ---
 
 ## Contents
@@ -118,6 +131,7 @@ ur10api/              Python API for your own control code (docs/ur10api.md)
   transforms.py         pose helpers (trans, rotz, displace, pose_error, ...)
   viz.py                live plots: Dashboard (3D views + time plots), FrameView
 examples/             ur10api demos: pose control, velocity path, force teleoperation, shape servoing
+  README.md, assets/      how to run each example and what to expect, with images of real runs
   04_shape_servoing.yaml  settings of the shape servoing example (camera, markers, gains, ...)
   shape_servoing/         its building blocks: vision + Kalman tracking, features, Jacobian, control, logger, window
 runs/                 summary figures saved by the examples (not tracked)
@@ -499,12 +513,15 @@ with Robot() as robot:                          # settings from ur10_config.yaml
     robot.stop()
 ```
 
-| Example | Shows |
-|---|---|
-| `examples/01_pose_frames.py` | pose control: the TCP aligns with target frames defined in the tool or base frame (P-controller on velocity, or joint moves) |
-| `examples/02_velocity_path.py` | velocity control: the TCP follows a circle or an infinity shape (feed-forward + P feedback) |
-| `examples/03_force_teleop.py` | compliant teleoperation: push the gripper and the arm follows the force/torque sensor (admittance control) |
-| `examples/04_shape_servoing.py` | model-free shape servoing: a RealSense camera tracks ArUco markers on an object held by the gripper, and the arm drives their positions, edges or curvature, in the image (2D) or the camera frame (3D), to a recorded target (Jacobian probed offline, Broyden-updated online, damped pseudoinverse); optional run logger with signals and videos |
+| Example | Shows | Real run |
+|---|---|---|
+| `examples/01_pose_frames.py` | pose control: the TCP aligns with target frames defined in the tool or base frame (P-controller on velocity, or joint moves) | <img src="examples/assets/01_pose_frames.png" width="300" alt="Pose control"> |
+| `examples/02_velocity_path.py` | velocity control: the TCP follows a circle or an infinity shape (feed-forward + P feedback) | <img src="examples/assets/02_velocity_path.png" width="300" alt="Velocity path"> |
+| `examples/03_force_teleop.py` | compliant teleoperation: push the gripper and the arm follows the force/torque sensor (admittance control) | <img src="examples/assets/03_force_teleop.png" width="300" alt="Compliant teleoperation"> |
+| `examples/04_shape_servoing.py` | model-free shape servoing: a RealSense camera tracks ArUco markers on an object held by the gripper, and the arm drives their positions, edges or curvature, in the image (2D) or the camera frame (3D), to a recorded target (Jacobian probed offline, Broyden-updated online, damped pseudoinverse); optional run logger with signals and videos | <img src="examples/assets/04_shape_servoing_camera.gif" width="300" alt="Shape servoing, camera view"><br><img src="examples/assets/04_shape_servoing_window.gif" width="300" alt="Shape servoing window"> |
+
+**[examples/README.md](examples/README.md)** shows how to run each one and what to
+expect, with figures and animations of real runs.
 
 Run them from the repository root, e.g. `python examples/01_pose_frames.py --help`.
 The defaults of examples 1–3 (targets, gains, path, dead bands…) are in the
@@ -517,9 +534,9 @@ The defaults of examples 1–3 (targets, gains, path, dead bands…) are in the
 - shows a live **dashboard**: an overview of the arm, a 3D close-up with the
   reference and the path the TCP really followed, and time plots of the target
   against the measured state (example 4: the camera image with the markers and
-  the target, a 3D view in the camera frame, the feature spaces, the joint velocities, the feature error and
-  the condition number of the Jacobian, with buttons for the workflow, the
-  gripper and joint jogging);
+  the target, a 3D view in the camera frame, the feature spaces, the joint
+  velocities, the feature error and the condition number of the Jacobian, with
+  buttons for the workflow, the gripper and joint jogging);
 - on `Ctrl+C`, when the window is closed or at the end, brakes and turns the
   window into a **summary** of the whole run, saved as a PNG in `runs/`.
 
