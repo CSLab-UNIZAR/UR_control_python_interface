@@ -20,6 +20,10 @@ twisted==25.5.0              # roslibpy transport, pinned to the validated versi
 autobahn==24.4.2
 PyYAML==6.0.3                # settings file ur10_config.yaml (ur10api/config.py)
 
+# --- Example 4, shape servoing (examples/04_shape_servoing.py) --------------------
+opencv-python-headless==4.14.0.94   # ArUco marker detection (cv2.aruco); headless: the plots use matplotlib
+pyrealsense2==2.58.4.10922          # Intel RealSense D435/D415 colour stream (wheels for Python 3.10 - 3.14)
+
 # --- Terminal and device controllers (controllers/) ------------------------------
 blessed==1.33.0              # key_controller.py (terminal keyboard control)
 pyspacemouse==2.0.0          # spacemouse_controller.py; also needs the hidapi library (see README)
